@@ -24,6 +24,9 @@
 #ifdef _WIN32
 #define _CRT_SECURE_NO_DEPRECATE
 #endif
+#include <iostream>
+#include <string>
+#include <sstream>
 #include <vector>
 #include <map>
 #include <set>
@@ -44,23 +47,39 @@
 #define SEEK(context, offset, origin) \
     if (context.Seek(context.UserData, offset, origin)) return OPBERR_SEEK_ERROR
 
+#define READ(buffer, size, count, context) \
+    if (context.Read(buffer, size, count, context.UserData) != count) return OPBERR_READ_ERROR
+#define READ_UINT7(var, context) \
+    if ((var = ReadUint7(context)) < 0) return OPBERR_READ_ERROR
+
+#define SUBMIT(stream, count, context) \
+    if (context.Submit(stream, count, context.ReceiverData)) return OPBERR_BUFFER_ERROR
+
 typedef struct Context Context;
 typedef struct Command Command;
 typedef struct OpbData OpbData;
 typedef struct Instrument Instrument;
 
 typedef struct Context {
-    Context() : Write(NULL), Seek(NULL), Tell(NULL), UserData(NULL), Format(OPB_Format_Default) {}
+// msvc whining about unscoped enums ugghhh
+#pragma warning(push)
+#pragma warning(disable : 26812)
+    Context() : Write(NULL), Seek(NULL), Tell(NULL), Read(NULL), Submit(NULL), UserData(NULL), ReceiverData(NULL), Format(OPB_Format_Default), Time(0) {}
+#pragma warning(pop)
 
     std::vector<Command> CommandStream;
-    StreamWriter Write;
-    StreamSeeker Seek;
-    StreamTeller Tell;
+    OPB_StreamWriter Write;
+    OPB_StreamSeeker Seek;
+    OPB_StreamTeller Tell;
+    OPB_StreamReader Read;
+    OPB_BufferReceiver Submit;
     OPB_Format Format;
     std::map<int, OpbData> DataMap;
     std::vector<Instrument> Instruments;
     std::vector<Command> Tracks[NUM_TRACKS];
+    double Time;
     void* UserData;
+    void* ReceiverData;
 } Context;
 
 OPB_LogHandler OPB_Log;
@@ -82,12 +101,20 @@ static std::string GetFormatName(OPB_Format fmt) {
 }
 
 static inline uint32_t FlipEndian32(uint32_t val) {
+#ifdef OPB_BIG_ENDIAN
+    return val;
+#else
     val = ((val << 8) & 0xFF00FF00) | ((val >> 8) & 0xFF00FF);
     return (val << 16) | (val >> 16);
+#endif
 }
 
 static inline uint16_t FlipEndian16(uint16_t val) {
+#ifdef OPB_BIG_ENDIAN
+    return val;
+#else
     return (val << 8) | ((val >> 8) & 0xFF);
+#endif
 }
 
 static int Uint7Size(uint32_t value) {
@@ -221,6 +248,8 @@ static std::map<int, int> RegisterOffsetToOpIndex = {
 #define REG_ATTACK 0x60
 #define REG_SUSTAIN 0x80
 #define REG_WAVE 0xE0
+#define REG_FREQUENCY 0xA0
+#define REG_NOTE 0xB0
 
 typedef struct Operator {
     int16_t Characteristic;
@@ -421,18 +450,6 @@ static int RegisterToOpIndex(int reg) {
         }
     }
     return -1;
-}
-
-static size_t WriteToFile(const void* buffer, size_t elementSize, size_t elementCount, void* context) {
-    return fwrite(buffer, elementSize, elementCount, (FILE*)context);
-}
-
-static int SeekInFile(void* context, long offset, int origin) {
-    return fseek((FILE*)context, offset, origin);
-}
-
-static long TellInFile(void* context) {
-    return ftell((FILE*)context);
 }
 
 static void SeparateTracks(Context& context) {
@@ -858,21 +875,33 @@ static int ConvertToOpb(Context& context) {
     return 0;
 }
 
+static size_t WriteToFile(const void* buffer, size_t elementSize, size_t elementCount, void* context) {
+    return fwrite(buffer, elementSize, elementCount, (FILE*)context);
+}
+
+static int SeekInFile(void* context, long offset, int origin) {
+    return fseek((FILE*)context, offset, origin);
+}
+
+static long TellInFile(void* context) {
+    return ftell((FILE*)context);
+}
+
 int OPB_OplToFile(OPB_Format format, OPB_Command* commandStream, size_t commandCount, const char* file) {
     FILE* outFile;
     if ((outFile = fopen(file, "wb")) == NULL) {
-        LOG("Couldn't open file '" << file << "' for writing");
-        return 0;
+        LOG("Couldn't open file '" << file << "' for writing\n");
+        return OPBERR_LOGGED;
     }
     int ret = OPB_OplToBinary(format, commandStream, commandCount, WriteToFile, SeekInFile, TellInFile, outFile);
     if (fclose(outFile)) {
-        LOG("Error while closing file '" << file << "'");
+        LOG("Error while closing file '" << file << "'\n");
         return OPBERR_LOGGED;
     }
     return ret;
 }
 
-int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t commandCount, StreamWriter write, StreamSeeker seek, StreamTeller tell, void* userData) {
+int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t commandCount, OPB_StreamWriter write, OPB_StreamSeeker seek, OPB_StreamTeller tell, void* userData) {
     Context context;
 
     context.Write = write;
@@ -897,4 +926,317 @@ int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t comman
     }
 
     return ConvertToOpb(context);
+}
+
+static int ReadInstrument(Context& context, Instrument* instr) {
+    uint8_t buffer[9];
+    READ(buffer, sizeof(uint8_t), 9, context);
+    *instr = {
+        buffer[0], // feedconn
+        {
+            buffer[1], // modulator characteristic
+            buffer[2], // modulator attack/decay
+            buffer[3], // modulator sustain/release
+            buffer[4], // modulator wave select
+        },
+        {
+            buffer[5], // carrier characteristic
+            buffer[6], // carrier attack/decay
+            buffer[7], // carrier sustain/release
+            buffer[8], // carrier wave select
+        },
+        (int)context.Instruments.size() // instrument index
+    };
+    return 0;
+}
+
+static int ReadUint7(Context& context) {
+    uint8_t b0 = 0, b1 = 0, b2 = 0, b3 = 0;
+
+    if (context.Read(&b0, sizeof(uint8_t), 1, context.UserData) != 1) return -1;
+    if (b0 >= 128) {
+        b0 &= 0b01111111;
+        if (context.Read(&b1, sizeof(uint8_t), 1, context.UserData) != 1) return -1;
+        if (b1 >= 128) {
+            b1 &= 0b01111111;
+            if (context.Read(&b2, sizeof(uint8_t), 1, context.UserData) != 1) return -1;
+            if (b2 >= 128) {
+                b2 &= 0b01111111;
+                if (context.Read(&b3, sizeof(uint8_t), 1, context.UserData) != 1) return -1;
+            }
+        }
+    }
+
+    return b0 | (b1 << 7) | (b2 << 14) | (b3 << 21);
+}
+
+#define DEFAULT_READBUFFER_SIZE 256
+
+static inline int AddToBuffer(Context& context, OPB_Command* buffer, int* index, OPB_Command cmd) {
+    buffer[*index] = cmd;
+    (*index)++;
+
+    if (*index >= DEFAULT_READBUFFER_SIZE) {
+        SUBMIT(buffer, DEFAULT_READBUFFER_SIZE, context);
+        *index = 0;
+    }
+
+    return 0;
+}
+
+#define ADD_TO_BUFFER(context, buffer, index, ...) \
+    { int MACRO_CONCAT(__ret, __LINE__); \
+    if ((MACRO_CONCAT(__ret, __LINE__) = AddToBuffer(context, buffer, bufferIndex, __VA_ARGS__))) return MACRO_CONCAT(__ret, __LINE__); }
+
+static int ReadCommand(Context& context, OPB_Command* buffer, int* bufferIndex, int mask) {
+    uint8_t baseAddr;
+    READ(&baseAddr, sizeof(uint8_t), 1, context);
+
+    int addr = baseAddr | mask;
+
+    switch (baseAddr) {
+        default: {
+            uint8_t data;
+            READ(&data, sizeof(uint8_t), 1, context);
+            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)addr, data, context.Time });
+            break;
+        }
+        
+        case OPB_CMD_PLAYINSTRUMENT:
+        case OPB_CMD_SETINSTRUMENT: {
+            int instrIndex;
+            READ_UINT7(instrIndex, context);
+
+            uint8_t channelMask[2];
+            READ(channelMask, sizeof(uint8_t), 2, context);
+
+            int channel = channelMask[0];
+            bool modLvl = (channel & 0b00100000) != 0;
+            bool carLvl = (channel & 0b01000000) != 0;
+            bool feedconn = (channel & 0b10000000) != 0;
+            channel &= 0b00011111;
+
+            if (channel < 0 || channel >= NUM_CHANNELS) {
+                LOG("Error reading OPB command: channel " << channel << " out of range\n");
+                return OPBERR_LOGGED;
+            }
+
+            int mask = channelMask[1];
+            bool modChr = (mask & 0b00000001) != 0;
+            bool modAtk = (mask & 0b00000010) != 0;
+            bool modSus = (mask & 0b00000100) != 0;
+            bool modWav = (mask & 0b00001000) != 0;
+            bool carChr = (mask & 0b00010000) != 0;
+            bool carAtk = (mask & 0b00100000) != 0;
+            bool carSus = (mask & 0b01000000) != 0;
+            bool carWav = (mask & 0b10000000) != 0;
+
+            uint8_t modLvlData = 0, carLvlData = 0;
+            if (modLvl) READ(&modLvlData, sizeof(uint8_t), 1, context);
+            if (carLvl) READ(&carLvlData, sizeof(uint8_t), 1, context);
+
+            uint8_t freq = 0, note = 0;
+            bool isPlay = baseAddr == OPB_CMD_PLAYINSTRUMENT;
+            if (isPlay) {
+                READ(&freq, sizeof(uint8_t), 1, context);
+                READ(&note, sizeof(uint8_t), 1, context);
+            }
+
+            if (instrIndex < 0 || instrIndex >= context.Instruments.size()) {
+                LOG("Error reading OPB command: instrument " << instrIndex << " out of range\n");
+                return OPBERR_LOGGED;
+            }
+
+            Instrument& instr = context.Instruments[instrIndex];
+            int conn = ChannelToOffset[channel];
+            int mod = OperatorOffsets[ChannelToOp[channel]];
+            int car = mod + 3;
+            int playOffset = ChannelToOffset[channel];
+
+            if (feedconn) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FEEDCONN + conn), (uint8_t)instr.FeedConn, context.Time });
+            if (modChr) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + mod), (uint8_t)instr.Modulator.Characteristic, context.Time });
+            if (modLvl) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + mod), modLvlData, context.Time });
+            if (modAtk) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + mod), (uint8_t)instr.Modulator.AttackDecay, context.Time });
+            if (modSus) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + mod), (uint8_t)instr.Modulator.SustainRelease, context.Time });
+            if (modWav) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + mod), (uint8_t)instr.Modulator.WaveSelect, context.Time });
+            if (carChr) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + car), (uint8_t)instr.Carrier.Characteristic, context.Time });
+            if (carLvl) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + car), carLvlData, context.Time });
+            if (carAtk) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + car), (uint8_t)instr.Carrier.AttackDecay, context.Time });
+            if (carSus) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + car), (uint8_t)instr.Carrier.SustainRelease, context.Time });
+            if (carWav) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + car), (uint8_t)instr.Carrier.WaveSelect, context.Time });
+            if (isPlay) {
+                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FREQUENCY + playOffset), freq, context.Time });
+                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_NOTE + playOffset), note, context.Time });
+            }
+
+            break;
+        }
+
+        case OPB_CMD_NOTEON:
+        case OPB_CMD_NOTEON + 1:
+        case OPB_CMD_NOTEON + 2:
+        case OPB_CMD_NOTEON + 3:
+        case OPB_CMD_NOTEON + 4:
+        case OPB_CMD_NOTEON + 5:
+        case OPB_CMD_NOTEON + 6:
+        case OPB_CMD_NOTEON + 7:
+        case OPB_CMD_NOTEON + 8: {
+            int channel = (baseAddr - 0xD7) + (mask != 0 ? 9 : 0);
+
+            if (channel < 0 || channel >= NUM_CHANNELS) {
+                LOG("Error reading OPB command: channel " << channel << " out of range\n");
+                return OPBERR_LOGGED;
+            }
+
+            uint8_t freqNote[2];
+            READ(freqNote, sizeof(uint8_t), 2, context);
+
+            uint8_t freq = freqNote[0];
+            uint8_t note = freqNote[1];
+
+            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(addr - (OPB_CMD_NOTEON - REG_FREQUENCY)), freq, context.Time });
+            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(addr - (OPB_CMD_NOTEON - REG_NOTE)), (uint8_t)(note & 0b00111111), context.Time });
+
+            if ((note & 0b01000000) != 0) {
+                // set modulator volume
+                uint8_t vol;
+                READ(&vol, sizeof(uint8_t), 1, context);
+                int reg = REG_LEVELS + OperatorOffsets[ChannelToOp[channel]];
+                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)reg, vol, context.Time });
+            }
+            if ((note & 0b10000000) != 0) {
+                // set carrier volume
+                uint8_t vol;
+                READ(&vol, sizeof(uint8_t), 1, context);
+                int reg = REG_LEVELS + 3 + OperatorOffsets[ChannelToOp[channel]];
+                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)reg, vol, context.Time });
+            }
+            break;
+        }
+    }
+
+    return 0;
+}
+
+static int ReadChunk(Context& context, OPB_Command* buffer, int* bufferIndex) {
+    int elapsed, loCount, hiCount;
+
+    READ_UINT7(elapsed, context);
+    READ_UINT7(loCount, context);
+    READ_UINT7(hiCount, context);
+
+    context.Time += elapsed / 1000.0;
+
+    for (int i = 0; i < loCount; i++) {
+        int ret = ReadCommand(context, buffer, bufferIndex, 0x0);
+        if (ret) return ret;
+    }
+    for (int i = 0; i < hiCount; i++) {
+        int ret = ReadCommand(context, buffer, bufferIndex, 0x100);
+        if (ret) return ret;
+    }
+
+    return 0;
+}
+
+static int ReadOpbDefault(Context& context) {
+    uint32_t header[3];
+    READ(header, sizeof(uint32_t), 3, context);
+    for (int i = 0; i < 3; i++) header[i] = FlipEndian32(header[i]);
+
+    uint32_t instrumentCount = header[1];
+    uint32_t chunkCount = header[2];
+
+    for (uint32_t i = 0; i < instrumentCount; i++) {
+        Instrument instr;
+        int ret = ReadInstrument(context, &instr);
+        if (ret) return ret;
+        context.Instruments.push_back(instr);
+    }
+
+    OPB_Command buffer[DEFAULT_READBUFFER_SIZE];
+    int bufferIndex = 0;
+
+    for (uint32_t i = 0; i < chunkCount; i++) {
+        int ret = ReadChunk(context, buffer, &bufferIndex);
+        if (ret) return ret;
+    }
+
+    if (bufferIndex > 0) {
+        SUBMIT(buffer, bufferIndex, context);
+    }
+
+    return 0;
+}
+
+#define RAW_READBUFFER_SIZE 256
+
+typedef struct RawOpbEntry {
+    uint16_t Elapsed;
+    uint16_t Addr;
+    uint8_t Data;
+} RawOpbEntry;
+
+static int ReadOpbRaw(Context& context) {
+    double time = 0;
+    RawOpbEntry buffer[RAW_READBUFFER_SIZE];
+    OPB_Command commandStream[RAW_READBUFFER_SIZE];
+
+    size_t itemsRead;
+    while ((itemsRead = context.Read(buffer, sizeof(RawOpbEntry), RAW_READBUFFER_SIZE, context.UserData)) > 0) {
+        for (int i = 0; i < itemsRead; i++) {
+            time += buffer[i].Elapsed / 1000.0;
+            
+            OPB_Command cmd = {
+                buffer[i].Addr,
+                buffer[i].Data,
+                time
+            };
+            commandStream[i] = cmd;
+        }
+        SUBMIT(commandStream, itemsRead, context);
+    }
+
+    return 0;
+}
+
+static int ConvertFromOpb(Context& context) {
+    uint8_t fmt;
+    READ(&fmt, sizeof(uint8_t), 1, context);
+
+    switch (fmt) {
+    default:
+        LOG("Error reading OPB file: unknown format " << fmt << "\n");
+        return OPBERR_LOGGED;
+    case OPB_Format_Default:
+        return ReadOpbDefault(context);
+    case OPB_Format_Raw:
+        return ReadOpbRaw(context);
+    }
+}
+
+static size_t ReadFromFile(void* buffer, size_t elementSize, size_t elementCount, void* context) {
+    return fread(buffer, elementSize, elementCount, (FILE*)context);
+}
+
+int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverData) {
+    FILE* inFile;
+    if ((inFile = fopen(file, "rb")) == NULL) {
+        LOG("Couldn't open file '" << file << "' for reading\n");
+        return OPBERR_LOGGED;
+    }
+    int ret = OPB_BinaryToOpl(ReadFromFile, inFile, receiver, receiverData);
+    fclose(inFile);
+    return ret;
+}
+
+int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData) {
+    Context context;
+
+    context.Read = reader;
+    context.Submit = receiver;
+    context.UserData = readerData;
+    context.ReceiverData = receiverData;
+
+    return ConvertFromOpb(context);
 }

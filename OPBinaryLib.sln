@@ -5,6 +5,8 @@ VisualStudioVersion = 16.0.31313.79
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OPBinaryLib", "OPBinaryLib.vcxproj", "{272E3EC8-1734-41DB-B225-B5ADAF95FDB9}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DumpOPL", "DumpOPL\DumpOPL.vcxproj", "{F2C67507-A331-419A-B5A2-E91B1EB6002E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -21,6 +23,14 @@ Global
 		{272E3EC8-1734-41DB-B225-B5ADAF95FDB9}.Release|x64.Build.0 = Release|x64
 		{272E3EC8-1734-41DB-B225-B5ADAF95FDB9}.Release|x86.ActiveCfg = Release|Win32
 		{272E3EC8-1734-41DB-B225-B5ADAF95FDB9}.Release|x86.Build.0 = Release|Win32
+		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Debug|x64.ActiveCfg = Debug|x64
+		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Debug|x64.Build.0 = Debug|x64
+		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Debug|x86.ActiveCfg = Debug|Win32
+		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Debug|x86.Build.0 = Debug|Win32
+		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Release|x64.ActiveCfg = Release|x64
+		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Release|x64.Build.0 = Release|x64
+		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Release|x86.ActiveCfg = Release|Win32
+		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

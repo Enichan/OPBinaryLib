@@ -23,18 +23,20 @@
 */
 #pragma once
 #include <stdint.h>
-#include <iostream>
-#include <string>
-#include <sstream>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+    // uncomment this for big endian architecture
+    //#define OPB_BIG_ENDIAN
+
     #define OPBERR_LOGGED 1
     #define OPBERR_WRITE_ERROR 2
     #define OPBERR_SEEK_ERROR 3
     #define OPBERR_TELL_ERROR 4
+    #define OPBERR_READ_ERROR 5
+    #define OPBERR_BUFFER_ERROR 6
 
     typedef struct OPB_Command {
         uint16_t Addr;
@@ -48,24 +50,32 @@ extern "C" {
     } OPB_Format;
 
     // must return elementCount if successful
-    typedef size_t(*StreamWriter)(const void* buffer, size_t elementSize, size_t elementCount, void* context);
+    typedef size_t(*OPB_StreamWriter)(const void* buffer, size_t elementSize, size_t elementCount, void* context);
 
     // must return 0 if successful
-    typedef int (*StreamSeeker)(void* context, long offset, int origin);
+    typedef int (*OPB_StreamSeeker)(void* context, long offset, int origin);
     
     // must return -1L is unsuccessful
-    typedef long (*StreamTeller)(void* context);
+    typedef long (*OPB_StreamTeller)(void* context);
+
+    // should return number of elements read
+    typedef size_t(*OPB_StreamReader)(void* buffer, size_t elementSize, size_t elementCount, void* context);
+
+    // Should return 0 if successful. Note that the array for `commandStream` is stack allocated and must be copied!
+    typedef int(*OPB_BufferReceiver)(OPB_Command* commandStream, size_t commandCount, void* context);
 
     // OPL command stream to binary. Returns 0 if successful.
     int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t commandCount,
-        StreamWriter write, StreamSeeker seek, StreamTeller tell, void* userData);
+        OPB_StreamWriter write, OPB_StreamSeeker seek, OPB_StreamTeller tell, void* userData);
 
     // OPL command stream to file. Returns 0 if successful.
     int OPB_OplToFile(OPB_Format format, OPB_Command* commandStream, size_t commandCount, const char* file);
 
     // OPB binary to OPL command stream. Returns 0 if successful.
+    int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData);
 
     // OPB file to OPL command stream. Returns 0 if successful.
+    int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverData);
 
     // OPBLib log function
     typedef void (*OPB_LogHandler)(const char* s);
