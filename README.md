@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
 
 Optionally you can pass in a `void*` pointer to user data that will be sent to the receiver function as the `context` argument.
 
-Set OPB_Log to a logging implementation to get logging.
+Set `OPB_Log` to a logging implementation to get logging.
 
 ## Is this production ready?
 

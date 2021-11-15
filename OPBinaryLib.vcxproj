@@ -139,7 +139,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="opblib.cpp" />
+    <ClCompile Include="opblib.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="opblib.h" />

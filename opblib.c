@@ -24,14 +24,127 @@
 #ifdef _WIN32
 #define _CRT_SECURE_NO_DEPRECATE
 #endif
-#include <iostream>
-#include <string>
-#include <sstream>
-#include <vector>
-#include <map>
-#include <set>
-#include <algorithm>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <string.h>
 #include "opblib.h"
+
+#define VECTOR_MIN_CAPACITY 8
+#define VECTOR_PTR(vector, index) (void*)((uint8_t*)((vector)->Storage) + (index) * v->ElementSize)
+// this only exists to make type declarations clearer
+#define VectorT(T) Vector
+
+typedef struct Vector {
+    size_t Count;
+    size_t Capacity;
+    size_t ElementSize;
+    void* Storage;
+} Vector;
+
+Vector Vector_New(size_t elementSize) {
+    Vector v = { 0 };
+    v.ElementSize = elementSize;
+    return v;
+}
+
+static void Vector_Free(Vector* v) {
+    if (v->Storage != NULL) {
+        free(v->Storage);
+    }
+    v->Capacity = 0;
+    v->Count = 0;
+}
+
+static void* Vector_Get(Vector* v, int index) {
+    if (index < 0 || index >= v->Count) {
+        return NULL;
+    }
+    if (v->ElementSize <= 0) {
+        return NULL;
+    }
+    return VECTOR_PTR(v, index);
+}
+#define Vector_GetT(T, vector, index) ((T*)Vector_Get(vector, index))
+
+static int Vector_Set(Vector* v, void* item, int index) {
+    if (index < 0 || index >= v->Count) {
+        return -1;
+    }
+    if (v->ElementSize <= 0) {
+        return -1;
+    }
+    memcpy(VECTOR_PTR(v, index), item, v->ElementSize);
+    return 0;
+}
+
+static int Vector_Add(Vector* v, void* item) {
+    if (v->ElementSize <= 0) {
+        return -1;
+    }
+    if (v->Count >= v->Capacity) {
+        size_t newCapacity = v->Capacity * 2;
+        if (newCapacity < VECTOR_MIN_CAPACITY) newCapacity = VECTOR_MIN_CAPACITY;
+
+        void* newStorage = malloc(newCapacity * v->ElementSize);
+        if (newStorage == NULL) {
+            return -1;
+        }
+
+        if (v->Storage != NULL) {
+            memcpy(newStorage, v->Storage, v->Count * v->ElementSize);
+            free(v->Storage);
+        }
+
+        v->Storage = newStorage;
+        v->Capacity = newCapacity;
+    }
+
+    v->Count++;
+    return Vector_Set(v, item, (size_t)((int)v->Count - 1));
+}
+
+static int Vector_AddRange(Vector* v, void* items, size_t count) {
+    if (v->ElementSize <= 0) {
+        return -1;
+    }
+    uint8_t* itemBytes = (uint8_t*)items;
+    for (size_t i = 0; i < count; i++, itemBytes += v->ElementSize) {
+        int ret;
+        ret = Vector_Add(v, (void*)itemBytes);
+        if (ret) return ret;
+    }
+    return 0;
+}
+
+typedef int(*VectorSortFunc)(const void* a, const void* b);
+
+static void Vector_Clear(Vector* v, bool keepStorage) {
+    v->Count = 0;
+    if (!keepStorage && v->Storage != NULL) {
+        free(v->Storage);
+        v->Storage = NULL;
+        v->Capacity = 0;
+    }
+}
+
+static void Vector_Sort(Vector* v, VectorSortFunc sortFunc) {
+    qsort(v->Storage, v->Count, v->ElementSize, sortFunc);
+}
+
+static const char* GetFilename(const char* path) {
+    const char* lastFwd = strrchr(path, '/');
+    const char* lastBck = strrchr(path, '\\');
+    if (lastFwd == NULL && lastBck == NULL) {
+        return path;
+    }
+    return lastFwd > lastBck ? lastFwd + 1 : lastBck + 1;
+}
+
+static const char* GetSourceFilename() {
+    return GetFilename(__FILE__);
+}
 
 #define CONCAT_IMPL(x, y) x##y
 #define MACRO_CONCAT(x, y) CONCAT_IMPL(x, y)
@@ -40,20 +153,42 @@
 #define NUM_TRACKS (NUM_CHANNELS + 1)
 
 #define WRITE(buffer, size, count, context) \
-    if (context.Write(buffer, size, count, context.UserData) != count) return OPBERR_WRITE_ERROR
+    if (context->Write(buffer, size, count, context->UserData) != count) { \
+        Log("OPB write error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        return OPBERR_WRITE_ERROR; \
+    }
+
 #define WRITE_UINT7(context, value) \
-    if (WriteUint7(context, value)) return OPBERR_WRITE_ERROR
+    if (WriteUint7(context, value)) { \
+        Log("OPB write error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        return OPBERR_WRITE_ERROR; \
+    }
 
 #define SEEK(context, offset, origin) \
-    if (context.Seek(context.UserData, offset, origin)) return OPBERR_SEEK_ERROR
+    if (context->Seek(context->UserData, offset, origin)) { \
+        Log("OPB seek error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        return OPBERR_SEEK_ERROR; \
+    }
+#define TELL(context, var) \
+    var = context->Tell(context->UserData); \
+    if (var == -1L) { \
+        Log("OPB file position error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        return OPBERR_TELL_ERROR; \
+    }
 
 #define READ(buffer, size, count, context) \
-    if (context.Read(buffer, size, count, context.UserData) != count) return OPBERR_READ_ERROR
+    if (context->Read(buffer, size, count, context->UserData) != count) { \
+        Log("OPB read error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        return OPBERR_READ_ERROR; \
+    }
 #define READ_UINT7(var, context) \
-    if ((var = ReadUint7(context)) < 0) return OPBERR_READ_ERROR
+    if ((var = ReadUint7(context)) < 0) { \
+        Log("OPB read error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        return OPBERR_READ_ERROR; \
+    }
 
 #define SUBMIT(stream, count, context) \
-    if (context.Submit(stream, count, context.ReceiverData)) return OPBERR_BUFFER_ERROR
+    if (context->Submit(stream, count, context->ReceiverData)) return OPBERR_BUFFER_ERROR
 
 typedef struct Context Context;
 typedef struct Command Command;
@@ -61,37 +196,76 @@ typedef struct OpbData OpbData;
 typedef struct Instrument Instrument;
 
 typedef struct Context {
+#ifdef __cplusplus
 // msvc whining about unscoped enums ugghhh
 #pragma warning(push)
 #pragma warning(disable : 26812)
-    Context() : Write(NULL), Seek(NULL), Tell(NULL), Read(NULL), Submit(NULL), UserData(NULL), ReceiverData(NULL), Format(OPB_Format_Default), Time(0) {}
+    Context() : DataMap({ 0 }), CommandStream({ 0 }), Instruments({ 0 }), Tracks(), Write(NULL), Seek(NULL), Tell(NULL), Read(NULL), Submit(NULL), UserData(NULL), ReceiverData(NULL), Format(OPB_Format_Default), Time(0) {}
 #pragma warning(pop)
+#endif
 
-    std::vector<Command> CommandStream;
+    VectorT(Command) CommandStream;
     OPB_StreamWriter Write;
     OPB_StreamSeeker Seek;
     OPB_StreamTeller Tell;
     OPB_StreamReader Read;
     OPB_BufferReceiver Submit;
     OPB_Format Format;
-    std::map<int, OpbData> DataMap;
-    std::vector<Instrument> Instruments;
-    std::vector<Command> Tracks[NUM_TRACKS];
+    VectorT(OpbData) DataMap;
+    VectorT(Instrument) Instruments;
+    VectorT(Command) Tracks[NUM_TRACKS];
     double Time;
     void* UserData;
     void* ReceiverData;
 } Context;
 
+void Context_Free(Context* context) {
+    Vector_Free(&context->CommandStream);
+    Vector_Free(&context->Instruments);
+    Vector_Free(&context->DataMap);
+    for (int i = 0; i < NUM_TRACKS; i++) {
+        Vector_Free(context->Tracks + i);
+    }
+}
+
 OPB_LogHandler OPB_Log;
 
-#define LOG(value) \
-if (OPB_Log) { \
-    std::stringstream MACRO_CONCAT(__ss, __LINE__); \
-    MACRO_CONCAT(__ss, __LINE__) << value; \
-    OPB_Log(MACRO_CONCAT(__ss, __LINE__).str().c_str()); \
-} \
+static inline size_t BufferSize(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    size_t result = vsnprintf(NULL, 0, format, args);
+    va_end(args);
+    return (size_t)(result + 1); // safe byte for \0
+}
 
-static std::string GetFormatName(OPB_Format fmt) {
+static void Log(const char* format, ...) {
+    if (!OPB_Log) return;
+
+    va_list args;
+
+    va_start(args, format);
+    size_t size = BufferSize(format, args);
+    va_end(args);
+
+    if (size == 0) return;
+
+    va_start(args, format);
+    char* s = NULL;
+    if (size < 0 || (s = (char*)malloc(size)) == NULL) {
+        vprintf(format, args);
+    }
+    else {
+        vsprintf(s, format, args);
+    }
+    va_end(args);
+
+    if (s != NULL) {
+        OPB_Log(s);
+        free(s);
+    }
+}
+
+static const char* GetFormatName(OPB_Format fmt) {
     switch (fmt) {
     default:
         return "Default";
@@ -143,43 +317,43 @@ typedef struct Command {
 typedef struct OpbData {
     uint32_t Count;
     uint8_t Args[16];
-
-    void WriteUint7(uint32_t value) {
-        if (value >= 2097152) {
-            uint8_t b0 = (value & 0b01111111) | 0b10000000;
-            uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
-            uint8_t b2 = ((value & 0b0111111100000000000000) >> 14) | 0b10000000;
-            uint8_t b3 = ((value & 0b11111111000000000000000000000) >> 21);
-            Args[Count] = b0; Count++;
-            Args[Count] = b1; Count++;
-            Args[Count] = b2; Count++;
-            Args[Count] = b3; Count++;
-        }
-        else if (value >= 16384) {
-            uint8_t b0 = (value & 0b01111111) | 0b10000000;
-            uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
-            uint8_t b2 = (value & 0b0111111100000000000000) >> 14;
-            Args[Count] = b0; Count++;
-            Args[Count] = b1; Count++;
-            Args[Count] = b2; Count++;
-        }
-        else if (value >= 128) {
-            uint8_t b0 = (value & 0b01111111) | 0b10000000;
-            uint8_t b1 = (value & 0b011111110000000) >> 7;
-            Args[Count] = b0; Count++;
-            Args[Count] = b1; Count++;
-        }
-        else {
-            uint8_t b0 = value & 0b01111111;
-            Args[Count] = b0; Count++;
-        }
-    }
-
-    void WriteU8(uint32_t value) {
-        Args[Count] = (uint8_t)value;
-        Count++;
-    }
 } OpbData;
+
+static void OpbData_WriteUint7(OpbData* data, uint32_t value) {
+    if (value >= 2097152) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
+        uint8_t b2 = ((value & 0b0111111100000000000000) >> 14) | 0b10000000;
+        uint8_t b3 = ((value & 0b11111111000000000000000000000) >> 21);
+        data->Args[data->Count] = b0; data->Count++;
+        data->Args[data->Count] = b1; data->Count++;
+        data->Args[data->Count] = b2; data->Count++;
+        data->Args[data->Count] = b3; data->Count++;
+    }
+    else if (value >= 16384) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
+        uint8_t b2 = (value & 0b0111111100000000000000) >> 14;
+        data->Args[data->Count] = b0; data->Count++;
+        data->Args[data->Count] = b1; data->Count++;
+        data->Args[data->Count] = b2; data->Count++;
+    }
+    else if (value >= 128) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = (value & 0b011111110000000) >> 7;
+        data->Args[data->Count] = b0; data->Count++;
+        data->Args[data->Count] = b1; data->Count++;
+    }
+    else {
+        uint8_t b0 = value & 0b01111111;
+        data->Args[data->Count] = b0; data->Count++;
+    }
+}
+
+static void OpbData_WriteU8(OpbData* data, uint32_t value) {
+    data->Args[data->Count] = (uint8_t)value;
+    data->Count++;
+}
 
 #define OPB_CMD_SETINSTRUMENT 0xD0
 #define OPB_CMD_PLAYINSTRUMENT 0xD1
@@ -200,47 +374,25 @@ static int ChannelToOffset[NUM_CHANNELS] = {
     0x100, 0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x107, 0x108,
 };
 
-static std::map<int, int> RegisterOffsetToChannel = {
-    { 0x00, 0 }, { 0x03, 0 },
-    { 0x01, 1 }, { 0x04, 1 },
-    { 0x02, 2 }, { 0x05, 2 },
-    { 0x08, 3 }, { 0x0B, 3 },
-    { 0x09, 4 }, { 0x0C, 4 },
-    { 0x0A, 5 }, { 0x0D, 5 },
-    { 0x10, 6 }, { 0x13, 6 },
-    { 0x11, 7 }, { 0x14, 7 },
-    { 0x12, 8 }, { 0x15, 8 },
-    { 0x100, 9 }, { 0x103, 9 },
-    { 0x101, 10 }, { 0x104, 10 },
-    { 0x102, 11 }, { 0x105, 11 },
-    { 0x108, 12 }, { 0x10B, 12 },
-    { 0x109, 13 }, { 0x10C, 13 },
-    { 0x10A, 14 }, { 0x10D, 14 },
-    { 0x110, 15 }, { 0x113, 15 },
-    { 0x111, 16 }, { 0x114, 16 },
-    { 0x112, 17 }, { 0x115, 17 },
-};
+static int RegisterOffsetToChannel(uint32_t offset) {
+    uint32_t baseoff = offset & 0xFF;
+    int chunk = baseoff / 8;
+    int suboff = baseoff % 8;
 
-static std::map<int, int> RegisterOffsetToOpIndex = {
-    { 0x00, 0 }, { 0x03, 1 },
-    { 0x01, 0 }, { 0x04, 1 },
-    { 0x02, 0 }, { 0x05, 1 },
-    { 0x08, 0 }, { 0x0B, 1 },
-    { 0x09, 0 }, { 0x0C, 1 },
-    { 0x0A, 0 }, { 0x0D, 1 },
-    { 0x10, 0 }, { 0x13, 1 },
-    { 0x11, 0 }, { 0x14, 1 },
-    { 0x12, 0 }, { 0x15, 1 },
-    { 0x100, 0 }, { 0x103, 1 },
-    { 0x101, 0 }, { 0x104, 1 },
-    { 0x102, 0 }, { 0x105, 1 },
-    { 0x108, 0 }, { 0x10B, 1 },
-    { 0x109, 0 }, { 0x10C, 1 },
-    { 0x10A, 0 }, { 0x10D, 1 },
-    { 0x110, 0 }, { 0x113, 1 },
-    { 0x111, 0 }, { 0x114, 1 },
-    { 0x112, 0 }, { 0x115, 1 },
-};
+    if (chunk >= 3 || suboff >= 6) {
+        return -1;
+    }
+    return chunk * 3 + (suboff % 3) + ((offset & 0x100) != 0 ? NUM_CHANNELS / 2 : 0);
+}
+
+static int RegisterOffsetToOpIndex(uint32_t offset) {
+    uint32_t baseoff = offset & 0xFF;
+    uint32_t suboff = baseoff % 8;
+    if (suboff >= 6) {
+        return -1;
+    }
+    return suboff >= 3;
+}
 
 #define REG_FEEDCONN 0xC0
 #define REG_CHARACTER 0x20
@@ -256,19 +408,6 @@ typedef struct Operator {
     int16_t AttackDecay;
     int16_t SustainRelease;
     int16_t WaveSelect;
-
-    bool operator==(const Operator& o) const {
-        return Characteristic == o.Characteristic && AttackDecay == o.AttackDecay &&
-            SustainRelease == o.SustainRelease && WaveSelect == o.WaveSelect;
-    }
-
-    bool operator<(const Operator& o)  const {
-        return
-            (Characteristic < o.Characteristic) ||
-            (Characteristic == o.Characteristic && AttackDecay < o.AttackDecay) ||
-            (Characteristic == o.Characteristic && AttackDecay == o.AttackDecay && SustainRelease < o.SustainRelease) ||
-            (Characteristic == o.Characteristic && AttackDecay == o.AttackDecay && SustainRelease == o.SustainRelease && WaveSelect < o.WaveSelect);
-    }
 } Operator;
 
 typedef struct Instrument {
@@ -276,42 +415,39 @@ typedef struct Instrument {
     Operator Modulator;
     Operator Carrier;
     int Index;
-
-    bool operator==(const Instrument& o) const {
-        return FeedConn == o.FeedConn && Modulator == o.Modulator && Carrier == o.Carrier;
-    }
-
-    bool operator<(const Instrument& o)  const {
-        return
-            (FeedConn < o.FeedConn) ||
-            (FeedConn == o.FeedConn && Modulator < o.Modulator) ||
-            (FeedConn == o.FeedConn && Modulator == o.Modulator && Carrier < o.Carrier);
-    }
-
-    bool IsComplete() {
-        return FeedConn > -1 &&
-            Modulator.Characteristic > -1 && Modulator.AttackDecay > -1 && Modulator.SustainRelease > -1 && Modulator.WaveSelect > -1 &&
-            Carrier.Characteristic > -1 && Carrier.AttackDecay > -1 && Carrier.SustainRelease > -1 && Carrier.WaveSelect > -1;
-    }
 } Instrument;
 
-static Instrument GetInstrument(Context& context, Command* feedconn,
+Context Context_New() {
+    Context context;
+    memset(&context, 0, sizeof(Context));
+
+    context.CommandStream = Vector_New(sizeof(Command));
+    context.Instruments = Vector_New(sizeof(Instrument));
+    context.DataMap = Vector_New(sizeof(OpbData));
+    for (int i = 0; i < NUM_TRACKS; i++) {
+        context.Tracks[i] = Vector_New(sizeof(Command));
+    }
+
+    return context;
+}
+
+static Instrument GetInstrument(Context* context, Command* feedconn,
     Command* modChar, Command* modAttack, Command* modSustain, Command* modWave,
     Command* carChar, Command* carAttack, Command* carSustain, Command* carWave) {
     // find a matching instrument
-    for (int i = 0; i < context.Instruments.size(); i++) {
-        const Instrument& instr = context.Instruments[i];
+    for (int i = 0; i < context->Instruments.Count; i++) {
+        Instrument* instr = Vector_GetT(Instrument, &context->Instruments, i);
 
-        if ((feedconn == NULL || instr.FeedConn == feedconn->Data) &&
-            (modChar == NULL || instr.Modulator.Characteristic == modChar->Data) &&
-            (modAttack == NULL || instr.Modulator.AttackDecay == modAttack->Data) &&
-            (modSustain == NULL || instr.Modulator.SustainRelease == modSustain->Data) &&
-            (modWave == NULL || instr.Modulator.WaveSelect == modWave->Data) &&
-            (carChar == NULL || instr.Carrier.Characteristic == carChar->Data) &&
-            (carAttack == NULL || instr.Carrier.AttackDecay == carAttack->Data) &&
-            (carSustain == NULL || instr.Carrier.SustainRelease == carSustain->Data) &&
-            (carWave == NULL || instr.Carrier.WaveSelect == carWave->Data)) {
-            return instr;
+        if ((feedconn == NULL || instr->FeedConn == feedconn->Data) &&
+            (modChar == NULL || instr->Modulator.Characteristic == modChar->Data) &&
+            (modAttack == NULL || instr->Modulator.AttackDecay == modAttack->Data) &&
+            (modSustain == NULL || instr->Modulator.SustainRelease == modSustain->Data) &&
+            (modWave == NULL || instr->Modulator.WaveSelect == modWave->Data) &&
+            (carChar == NULL || instr->Carrier.Characteristic == carChar->Data) &&
+            (carAttack == NULL || instr->Carrier.AttackDecay == carAttack->Data) &&
+            (carSustain == NULL || instr->Carrier.SustainRelease == carSustain->Data) &&
+            (carWave == NULL || instr->Carrier.WaveSelect == carWave->Data)) {
+            return *instr;
         }
     }
 
@@ -330,22 +466,22 @@ static Instrument GetInstrument(Context& context, Command* feedconn,
             carSustain == NULL ? -1 : carSustain->Data,
             carWave == NULL ? -1 : carWave->Data,
         },
-        (int32_t)context.Instruments.size()
+        (int)context->Instruments.Count
     };
-    context.Instruments.push_back(instr);
+    Vector_Add(&context->Instruments, &instr);
     return instr;
 }
 
-static int WriteInstrument(Context& context, const Instrument& instr) {
-    uint8_t feedConn = (uint8_t)(instr.FeedConn >= 0 ? instr.FeedConn : 0);
-    uint8_t modChr = (uint8_t)(instr.Modulator.Characteristic >= 0 ? instr.Modulator.Characteristic : 0);
-    uint8_t modAtk = (uint8_t)(instr.Modulator.AttackDecay >= 0 ? instr.Modulator.AttackDecay : 0);
-    uint8_t modSus = (uint8_t)(instr.Modulator.SustainRelease >= 0 ? instr.Modulator.SustainRelease : 0);
-    uint8_t modWav = (uint8_t)(instr.Modulator.WaveSelect >= 0 ? instr.Modulator.WaveSelect : 0);
-    uint8_t carChr = (uint8_t)(instr.Carrier.Characteristic >= 0 ? instr.Carrier.Characteristic : 0);
-    uint8_t carAtk = (uint8_t)(instr.Carrier.AttackDecay >= 0 ? instr.Carrier.AttackDecay : 0);
-    uint8_t carSus = (uint8_t)(instr.Carrier.SustainRelease >= 0 ? instr.Carrier.SustainRelease : 0);
-    uint8_t carWav = (uint8_t)(instr.Carrier.WaveSelect >= 0 ? instr.Carrier.WaveSelect : 0);
+static int WriteInstrument(Context* context, const Instrument* instr) {
+    uint8_t feedConn = (uint8_t)(instr->FeedConn >= 0 ? instr->FeedConn : 0);
+    uint8_t modChr = (uint8_t)(instr->Modulator.Characteristic >= 0 ? instr->Modulator.Characteristic : 0);
+    uint8_t modAtk = (uint8_t)(instr->Modulator.AttackDecay >= 0 ? instr->Modulator.AttackDecay : 0);
+    uint8_t modSus = (uint8_t)(instr->Modulator.SustainRelease >= 0 ? instr->Modulator.SustainRelease : 0);
+    uint8_t modWav = (uint8_t)(instr->Modulator.WaveSelect >= 0 ? instr->Modulator.WaveSelect : 0);
+    uint8_t carChr = (uint8_t)(instr->Carrier.Characteristic >= 0 ? instr->Carrier.Characteristic : 0);
+    uint8_t carAtk = (uint8_t)(instr->Carrier.AttackDecay >= 0 ? instr->Carrier.AttackDecay : 0);
+    uint8_t carSus = (uint8_t)(instr->Carrier.SustainRelease >= 0 ? instr->Carrier.SustainRelease : 0);
+    uint8_t carWav = (uint8_t)(instr->Carrier.WaveSelect >= 0 ? instr->Carrier.WaveSelect : 0);
 
     WRITE(&feedConn, sizeof(uint8_t), 1, context);
     WRITE(&modChr, sizeof(uint8_t), 1, context);
@@ -360,7 +496,7 @@ static int WriteInstrument(Context& context, const Instrument& instr) {
     return 0;
 }
 
-static int WriteUint7(Context& context, uint32_t value) {
+static int WriteUint7(Context* context, uint32_t value) {
     if (value >= 2097152) {
         uint8_t b0 = (value & 0b01111111) | 0b10000000;
         uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
@@ -420,8 +556,9 @@ static int ChannelFromRegister(int reg) {
         if ((reg & 0x100) != 0) {
             offset |= 0x100;
         }
-        if (RegisterOffsetToChannel.count(offset)) {
-            return RegisterOffsetToChannel[offset];
+        int ch;
+        if ((ch = RegisterOffsetToChannel(offset)) >= 0) {
+            return ch;
         }
     }
     else if ((baseReg >= 0xA0 && baseReg <= 0xB8) || (baseReg >= 0xC0 && baseReg <= 0xC8)) {
@@ -445,21 +582,22 @@ static int RegisterToOpIndex(int reg) {
         if (offset < 0 || offset >= 0x16) {
             return -1;
         }
-        if (RegisterOffsetToOpIndex.count(offset)) {
-            return RegisterOffsetToOpIndex[offset];
+        int op;
+        if ((op = RegisterOffsetToOpIndex(offset)) >= 0) {
+            return op;
         }
     }
     return -1;
 }
 
-static void SeparateTracks(Context& context) {
-    for (int i = 0; i < context.CommandStream.size(); i++) {
-        const Command& cmd = context.CommandStream[i];
+static void SeparateTracks(Context* context) {
+    for (int i = 0; i < context->CommandStream.Count; i++) {
+        Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
 
-        int channel = ChannelFromRegister(cmd.Addr);
+        int channel = ChannelFromRegister(cmd->Addr);
         if (channel < 0) channel = NUM_TRACKS - 1;
 
-        context.Tracks[channel].push_back(cmd);
+        Vector_Add(&context->Tracks[channel], cmd);
     }
 }
 
@@ -479,11 +617,16 @@ static int CountInstrumentChanges(Command* feedconn,
     return count;
 }
 
-static int ProcessRange(Context& context, int channel, double time, std::vector<Command> commands, std::vector<Command>& range, int start, int end) {
-    for (const auto& cmd : commands) {
-        if (cmd.Time != time) {
+static int ProcessRange(Context* context, int channel, double time, Command* commands, int cmdCount, Vector* range, 
+    int start, int end // these last two are only for logging in case of error
+) {
+    //for (const auto& cmd : commands) {
+    for (int i = 0; i < cmdCount; i++) {
+        Command* cmd = commands + i;
+
+        if (cmd->Time != time) {
             int timeMs = (int)(time * 1000);
-            LOG("A timing error occurred at " << timeMs << "ms on channel " << channel << " in range " << start << "-" << end << "\n");
+            Log("A timing error occurred at %d ms on channel %d in range %d-%d\n", timeMs, channel, start, end);
             return OPBERR_LOGGED;
         }
     }
@@ -492,54 +635,54 @@ static int ProcessRange(Context& context, int channel, double time, std::vector<
     Command* carChar = NULL, * carLevel = NULL, * carAttack = NULL, * carSustain = NULL, * carWave = NULL;
     Command* freq = NULL, * note = NULL, * feedconn = NULL;
 
-    for (int i = 0; i < commands.size(); i++) {
-        const Command& cmd = commands[i];
+    for (int i = 0; i < cmdCount; i++) {
+        Command* cmd = commands + i;
 
-        int baseAddr = cmd.Addr & 0xFF;
+        int baseAddr = cmd->Addr & 0xFF;
         int op;
 
-        if ((op = RegisterToOpIndex(cmd.Addr)) > -1) {
+        if ((op = RegisterToOpIndex(cmd->Addr)) > -1) {
             // command affects modulator or carrier
             if (op == 0) {
                 if (baseAddr >= 0x20 && baseAddr <= 0x35)
-                    modChar = &commands[i];
+                    modChar = cmd;
                 else if (baseAddr >= 0x40 && baseAddr <= 0x55)
-                    modLevel = &commands[i];
+                    modLevel = cmd;
                 else if (baseAddr >= 0x60 && baseAddr <= 0x75)
-                    modAttack = &commands[i];
+                    modAttack = cmd;
                 else if (baseAddr >= 0x80 && baseAddr <= 0x95)
-                    modSustain = &commands[i];
+                    modSustain = cmd;
                 else if (baseAddr >= 0xE0 && baseAddr <= 0xF5)
-                    modWave = &commands[i];
+                    modWave = cmd;
             }
             else {
                 if (baseAddr >= 0x20 && baseAddr <= 0x35)
-                    carChar = &commands[i];
+                    carChar = cmd;
                 else if (baseAddr >= 0x40 && baseAddr <= 0x55)
-                    carLevel = &commands[i];
+                    carLevel = cmd;
                 else if (baseAddr >= 0x60 && baseAddr <= 0x75)
-                    carAttack = &commands[i];
+                    carAttack = cmd;
                 else if (baseAddr >= 0x80 && baseAddr <= 0x95)
-                    carSustain = &commands[i];
+                    carSustain = cmd;
                 else if (baseAddr >= 0xE0 && baseAddr <= 0xF5)
-                    carWave = &commands[i];
+                    carWave = cmd;
             }
         }
         else {
             if (baseAddr >= 0xA0 && baseAddr <= 0xA8)
-                freq = &commands[i];
+                freq = cmd;
             else if (baseAddr >= 0xB0 && baseAddr <= 0xB8) {
                 if (note != NULL) {
                     int timeMs = (int)(time * 1000);
-                    LOG("A decoding error occurred at " << timeMs << "ms on channel " << channel << " in range " << start << "-" << end << "\n");
+                    Log("A decoding error occurred at %d ms on channel %d in range %d-%d\n", timeMs, channel, start, end);
                     return OPBERR_LOGGED;
                 }
-                note = &commands[i];
+                note = cmd;
             }
             else if (baseAddr >= 0xC0 && baseAddr <= 0xC8)
-                feedconn = &commands[i];
+                feedconn = cmd;
             else {
-                range.push_back(cmd);
+                Vector_Add(range, cmd);
             }
         }
     }
@@ -568,13 +711,13 @@ static int ProcessRange(Context& context, int channel, double time, std::vector<
 
         if (size < instrChanges * 2) {
             OpbData data = { 0 };
-            data.WriteUint7(instr.Index);
+            OpbData_WriteUint7(&data, instr.Index);
 
             uint8_t channelMask = channel |
                 (modLevel != NULL ? 0b00100000 : 0) |
                 (carLevel != NULL ? 0b01000000 : 0) |
                 (feedconn != NULL ? 0b10000000 : 0);
-            data.WriteU8(channelMask);
+            OpbData_WriteU8(&data, channelMask);
 
             int mask =
                 (modChar != NULL ? 0b00000001 : 0) |
@@ -585,24 +728,24 @@ static int ProcessRange(Context& context, int channel, double time, std::vector<
                 (carAttack != NULL ? 0b00100000 : 0) |
                 (carSustain != NULL ? 0b01000000 : 0) |
                 (carWave != NULL ? 0b10000000 : 0);
-            data.WriteU8(mask);
+            OpbData_WriteU8(&data, mask);
 
-            if (modLevel != NULL) data.WriteU8(modLevel->Data);
-            if (carLevel != NULL) data.WriteU8(carLevel->Data);
+            if (modLevel != NULL) OpbData_WriteU8(&data, modLevel->Data);
+            if (carLevel != NULL) OpbData_WriteU8(&data, carLevel->Data);
 
             // instrument command is 0xD0
             int reg = OPB_CMD_SETINSTRUMENT;
 
             if (freq != NULL && note != NULL) {
-                data.WriteU8(freq->Data);
-                data.WriteU8(note->Data);
+                OpbData_WriteU8(&data, freq->Data);
+                OpbData_WriteU8(&data, note->Data);
 
                 // play command is 0xD1
                 reg = OPB_CMD_PLAYINSTRUMENT;
             }
 
-            int opbIndex = (int32_t)context.DataMap.size() + 1;
-            context.DataMap[opbIndex] = data;
+            int opbIndex = (int32_t)context->DataMap.Count + 1;
+            Vector_Add(&context->DataMap, &data);
 
             Command cmd = {
                 (uint16_t)(reg + (channel >= 9 ? 0x100 : 0)), // register
@@ -612,7 +755,7 @@ static int ProcessRange(Context& context, int channel, double time, std::vector<
                 opbIndex
             };
 
-            range.push_back(cmd);
+            Vector_Add(range, &cmd);
             feedconn = modChar = modLevel = modAttack = modSustain = modWave = carChar = carLevel = carAttack = carSustain = carWave = NULL;
 
             if (freq != NULL && note != NULL) {
@@ -627,7 +770,7 @@ static int ProcessRange(Context& context, int channel, double time, std::vector<
         int reg = OPB_CMD_NOTEON + (channel % 9) + (channel >= 9 ? 0x100 : 0);
 
         OpbData data = { 0 };
-        data.WriteU8(freq->Data);
+        OpbData_WriteU8(&data, freq->Data);
 
         int noteLevels = note->Data & 0b00111111;
 
@@ -639,17 +782,17 @@ static int ProcessRange(Context& context, int channel, double time, std::vector<
             noteLevels |= 0b10000000;
         }
 
-        data.WriteU8(noteLevels);
+        OpbData_WriteU8(&data, noteLevels);
 
         if (modLevel != NULL) {
-            data.WriteU8(modLevel->Data);
+            OpbData_WriteU8(&data, modLevel->Data);
         }
         if (carLevel != NULL) {
-            data.WriteU8(carLevel->Data);
+            OpbData_WriteU8(&data, carLevel->Data);
         }
 
-        int opbIndex = (int32_t)context.DataMap.size() + 1;
-        context.DataMap[opbIndex] = data;
+        int opbIndex = (int32_t)context->DataMap.Count + 1;
+        Vector_Add(&context->DataMap, &data);
 
         Command cmd = {
             (uint16_t)reg, // register
@@ -659,80 +802,85 @@ static int ProcessRange(Context& context, int channel, double time, std::vector<
             opbIndex
         };
 
-        range.push_back(cmd);
+        Vector_Add(range, &cmd);
         freq = note = modLevel = carLevel = NULL;
     }
 
-    if (modChar != NULL) range.push_back(*modChar);
-    if (modLevel != NULL) range.push_back(*modLevel);
-    if (modAttack != NULL) range.push_back(*modAttack);
-    if (modSustain != NULL) range.push_back(*modSustain);
-    if (modWave != NULL) range.push_back(*modWave);
+    if (modChar != NULL) Vector_Add(range, modChar);
+    if (modLevel != NULL) Vector_Add(range, modLevel);
+    if (modAttack != NULL) Vector_Add(range, modAttack);
+    if (modSustain != NULL) Vector_Add(range, modSustain);
+    if (modWave != NULL) Vector_Add(range, modWave);
 
-    if (carChar != NULL) range.push_back(*carChar);
-    if (carLevel != NULL) range.push_back(*carLevel);
-    if (carAttack != NULL) range.push_back(*carAttack);
-    if (carSustain != NULL) range.push_back(*carSustain);
-    if (carWave != NULL) range.push_back(*carWave);
+    if (carChar != NULL) Vector_Add(range, carChar);
+    if (carLevel != NULL) Vector_Add(range, carLevel);
+    if (carAttack != NULL) Vector_Add(range, carAttack);
+    if (carSustain != NULL) Vector_Add(range, carSustain);
+    if (carWave != NULL) Vector_Add(range, carWave);
 
-    if (feedconn != NULL) range.push_back(*feedconn);
-    if (freq != NULL) range.push_back(*freq);
-    if (note != NULL) range.push_back(*note);
+    if (feedconn != NULL) Vector_Add(range, feedconn);
+    if (freq != NULL) Vector_Add(range, freq);
+    if (note != NULL) Vector_Add(range, note);
 
     return 0;
 }
 
-static int ProcessTrack(Context& context, int channel, std::vector<Command>& chOut) {
-    const std::vector<Command>& commands = context.Tracks[channel];
+static int ProcessTrack(Context* context, int channel, Vector* chOut) {
+    Vector* commands = &context->Tracks[channel];
 
-    if (commands.size() == 0) {
+    if (commands->Count == 0) {
         return 0;
     }
 
     int lastIndex = 0;
-    int lastOrder = commands[0].OrderIndex;
+    int lastOrder = Vector_GetT(Command, commands, 0)->OrderIndex;
     int i = 0;
 
-    while (i < commands.size()) {
-        double time = commands[i].Time;
+    while (i < commands->Count) {
+        double time = Vector_GetT(Command, commands, i)->Time;
 
         int start = i;
         // sequences must be all in the same time block and in order
         // sequences are capped by a note command (write to register B0-B8 or 1B0-1B8)
-        while (i < commands.size() && commands[i].Time <= time && (commands[i].OrderIndex - lastOrder) <= 1) {
-            const auto& cmd = commands[i];
+        while (i < commands->Count && Vector_GetT(Command, commands, i)->Time <= time && (Vector_GetT(Command, commands, i)->OrderIndex - lastOrder) <= 1) {
+            Command* cmd = Vector_GetT(Command, commands, i);
 
-            lastOrder = commands[i].OrderIndex;
+            lastOrder = cmd->OrderIndex;
             i++;
 
-            if (IsChannelNoteEvent(cmd.Addr, channel)) {
+            if (IsChannelNoteEvent(cmd->Addr, channel)) {
                 break;
             }
         }
         int end = i;
 
-        std::vector<Command> range;
-        int ret = ProcessRange(context, channel, time, std::vector<Command>(commands.begin() + start, commands.begin() + end), range, start, end);
-        if (ret) return ret;
-        chOut.insert(chOut.end(), range.begin(), range.end());
+        VectorT(Command) range = Vector_New(sizeof(Command));
+        int ret = ProcessRange(context, channel, time, Vector_GetT(Command, commands, start), end - start, &range, start, end);
+        if (ret) {
+            Vector_Free(&range);
+            return ret;
+        }
+        
+        Vector_AddRange(chOut, range.Storage, range.Count);
+        Vector_Free(&range);
 
-        if (i < commands.size()) {
-            lastOrder = commands[i].OrderIndex;
+        if (i < commands->Count) {
+            lastOrder = Vector_GetT(Command, commands, i)->OrderIndex;
         }
     }
 
     return 0;
 }
 
-static int WriteChunk(Context& context, double elapsed, int start, int count) {
+static int WriteChunk(Context* context, double elapsed, int start, int count) {
     uint32_t elapsedMs = (uint32_t)(elapsed * 1000);
     int loCount = 0;
     int hiCount = 0;
 
     for (int i = start; i < start + count; i++) {
-        const Command& cmd = context.CommandStream[i];
+        Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
 
-        if ((cmd.Addr & 0x100) == 0) {
+        if ((cmd->Addr & 0x100) == 0) {
             loCount++;
         }
         else {
@@ -749,20 +897,20 @@ static int WriteChunk(Context& context, double elapsed, int start, int count) {
     bool isLow = true;
     while (true) {
         for (int i = start; i < start + count; i++) {
-            const Command& cmd = context.CommandStream[i];
+            Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
 
-            if (((cmd.Addr & 0x100) == 0) == isLow) {
-                uint8_t baseAddr = cmd.Addr & 0xFF;
+            if (((cmd->Addr & 0x100) == 0) == isLow) {
+                uint8_t baseAddr = cmd->Addr & 0xFF;
                 WRITE(&baseAddr, sizeof(uint8_t), 1, context);
 
-                if (cmd.DataIndex) {
+                if (cmd->DataIndex) {
                     // opb command
-                    OpbData data = context.DataMap[cmd.DataIndex];
-                    WRITE(data.Args, sizeof(uint8_t), data.Count, context);
+                    OpbData* data = Vector_GetT(OpbData, &context->DataMap, cmd->DataIndex - 1);
+                    WRITE(data->Args, sizeof(uint8_t), data->Count, context);
                 }
                 else {
                     // regular write
-                    WRITE(&cmd.Data, sizeof(uint8_t), 1, context);
+                    WRITE(&(cmd->Data), sizeof(uint8_t), 1, context);
                 }
             }
         }
@@ -777,61 +925,78 @@ static int WriteChunk(Context& context, double elapsed, int start, int count) {
     return 0;
 }
 
-static int ConvertToOpb(Context& context) {
-    if (context.Format < OPB_Format_Default || context.Format > OPB_Format_Raw) {
-        context.Format = OPB_Format_Default;
+static int SortCommands(const void* a, const void* b) {
+    return ((Command*)a)->OrderIndex - ((Command*)b)->OrderIndex;
+}
+
+static int ConvertToOpb(Context* context) {
+    if (context->Format < OPB_Format_Default || context->Format > OPB_Format_Raw) {
+        context->Format = OPB_Format_Default;
     }
 
-    LOG("OPB format " << context.Format << " (" << GetFormatName(context.Format) << ")\n");
+    Log("OPB format %d (%s)\n", context->Format, GetFormatName(context->Format));
 
-    uint8_t fmt = (uint8_t)context.Format;
+    uint8_t fmt = (uint8_t)context->Format;
     WRITE(&fmt, sizeof(uint8_t), 1, context);
 
-    if (context.Format == OPB_Format_Raw) {
-        LOG("Writing RAW OPL data stream\n");
+    if (context->Format == OPB_Format_Raw) {
+        Log("Writing raw OPL data stream\n");
+
         double lastTime = 0.0;
-        for (const auto& cmd : context.CommandStream) {
-            uint16_t elapsed = FlipEndian16((uint16_t)((cmd.Time - lastTime) * 1000.0));
-            uint16_t addr = FlipEndian16(cmd.Addr);
+        for (int i = 0; i < context->CommandStream.Count; i++) {
+            Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
+
+            uint16_t elapsed = FlipEndian16((uint16_t)((cmd->Time - lastTime) * 1000.0));
+            uint16_t addr = FlipEndian16(cmd->Addr);
 
             WRITE(&elapsed, sizeof(uint16_t), 1, context);
             WRITE(&addr, sizeof(uint16_t), 1, context);
-            WRITE(&cmd.Data, sizeof(uint8_t), 1, context);
-            lastTime = cmd.Time;
+            WRITE(&(cmd->Data), sizeof(uint8_t), 1, context);
+            lastTime = cmd->Time;
         }
         return 0;
     }
 
     // separate command stream into tracks
-    LOG("Separating OPL data stream into channels\n");
+    Log("Separating OPL data stream into channels\n");
     SeparateTracks(context);
 
     // process each track into its own output vector
-    std::vector<Command> chOut[NUM_TRACKS];
+    VectorT(Command) chOut[NUM_TRACKS];
+
     for (int i = 0; i < NUM_TRACKS; i++) {
-        LOG("Processing channel " << i << "\n");
-        int ret = ProcessTrack(context, i, chOut[i]);
-        if (ret) return ret;
+        Log("Processing channel %d\n", i);
+        chOut[i] = Vector_New(sizeof(Command));
+
+        int ret = ProcessTrack(context, i, chOut + i);
+        if (ret) {
+            for (int j = 0; j < NUM_TRACKS; j++) {
+                Vector_Free(chOut + j);
+            }
+            return ret;
+        }
     }
 
     // combine all output back into command stream
-    LOG("Combining processed data into linear stream\n");
-    context.CommandStream.clear();
+    Log("Combining processed data into linear stream\n");
+    Vector_Clear(&context->CommandStream, true);
     for (int i = 0; i < NUM_TRACKS; i++) {
-        context.CommandStream.insert(context.CommandStream.end(), chOut[i].begin(), chOut[i].end());
+        Vector_AddRange(&context->CommandStream, chOut[i].Storage, chOut[i].Count);
+    }
+
+    for (int j = 0; j < NUM_TRACKS; j++) {
+        Vector_Free(chOut + j);
     }
 
     // sort by received order
-    std::sort(context.CommandStream.begin(), context.CommandStream.end(), [](Command a, Command b) {
-        return a.OrderIndex < b.OrderIndex;
-    });
+    Vector_Sort(&context->CommandStream, SortCommands);
 
     // write instruments table
     SEEK(context, 12, SEEK_CUR); // skip header
 
-    LOG("Writing instrument table\n");
-    for (int i = 0; i < context.Instruments.size(); i++) {
-        int ret = WriteInstrument(context, context.Instruments[i]);
+    Log("Writing instrument table\n");
+    for (int i = 0; i < context->Instruments.Count; i++) {
+        int ret = WriteInstrument(context, Vector_GetT(Instrument, &context->Instruments, i));
         if (ret) return ret;
     }
 
@@ -840,12 +1005,12 @@ static int ConvertToOpb(Context& context) {
     double lastTime = 0;
     int i = 0;
 
-    LOG("Writing chunks\n");
-    while (i < context.CommandStream.size()) {
-        double chunkTime = context.CommandStream[i].Time;
+    Log("Writing chunks\n");
+    while (i < context->CommandStream.Count) {
+        double chunkTime = Vector_GetT(Command, &context->CommandStream, i)->Time;
 
         int start = i;
-        while (i < context.CommandStream.size() && context.CommandStream[i].Time <= chunkTime) {
+        while (i < context->CommandStream.Count && Vector_GetT(Command, &context->CommandStream, i)->Time <= chunkTime) {
             i++;
         }
         int end = i;
@@ -858,13 +1023,13 @@ static int ConvertToOpb(Context& context) {
     }
 
     // write header
-    LOG("Writing header\n");
+    Log("Writing header\n");
 
-    long fpos = context.Tell(context.UserData);
-    if (fpos == -1L) return OPBERR_TELL_ERROR;
+    long fpos;
+    TELL(context, fpos);
 
     uint32_t length = FlipEndian32(fpos);
-    uint32_t instrCount = FlipEndian32((uint32_t)context.Instruments.size());
+    uint32_t instrCount = FlipEndian32((uint32_t)context->Instruments.Count);
     uint32_t chunkCount = FlipEndian32(chunks);
 
     SEEK(context, 1, SEEK_SET);
@@ -890,19 +1055,19 @@ static long TellInFile(void* context) {
 int OPB_OplToFile(OPB_Format format, OPB_Command* commandStream, size_t commandCount, const char* file) {
     FILE* outFile;
     if ((outFile = fopen(file, "wb")) == NULL) {
-        LOG("Couldn't open file '" << file << "' for writing\n");
+        Log("Couldn't open file '%s' for writing\n", file);
         return OPBERR_LOGGED;
     }
     int ret = OPB_OplToBinary(format, commandStream, commandCount, WriteToFile, SeekInFile, TellInFile, outFile);
     if (fclose(outFile)) {
-        LOG("Error while closing file '" << file << "'\n");
+        Log("Error while closing file '%s'\n", file);
         return OPBERR_LOGGED;
     }
     return ret;
 }
 
 int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t commandCount, OPB_StreamWriter write, OPB_StreamSeeker seek, OPB_StreamTeller tell, void* userData) {
-    Context context;
+    Context context = Context_New();
 
     context.Write = write;
     context.Seek = seek;
@@ -912,26 +1077,47 @@ int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t comman
 
     // convert stream to internal format
     for (int i = 0; i < commandCount; i++) {
-        const OPB_Command& src = commandStream[i];
+        const OPB_Command* src = commandStream + i;
 
         Command cmd = {
-            src.Addr,   // OPL register
-            src.Data,   // OPL data
-            src.Time,   // Time in seconds
-            i,          // Stream index
-            0           // Data index
+            src->Addr,   // OPL register
+            src->Data,   // OPL data
+            src->Time,   // Time in seconds
+            i,           // Stream index
+            0            // Data index
         };
 
-        context.CommandStream.push_back(cmd);
+        Vector_Add(&context.CommandStream, &cmd);
     }
 
-    return ConvertToOpb(context);
+    int ret = ConvertToOpb(&context);
+    Context_Free(&context);
+
+    switch (ret) {
+    case OPBERR_WRITE_ERROR:
+        Log("A write error occurred while converting to OPB\n");
+        break;
+    case OPBERR_SEEK_ERROR:
+        Log("A seek error occurred while converting to OPB\n");
+        break;
+    case OPBERR_TELL_ERROR:
+        Log("A file position error occurred while converting to OPB\n");
+        break;
+    case OPBERR_READ_ERROR:
+        Log("A read error occurred while converting to OPB\n");
+        break;
+    case OPBERR_BUFFER_ERROR:
+        Log("A buffer error occurred while converting to OPB\n");
+        break;
+    }
+
+    return ret;
 }
 
-static int ReadInstrument(Context& context, Instrument* instr) {
+static int ReadInstrument(Context* context, Instrument* instr) {
     uint8_t buffer[9];
     READ(buffer, sizeof(uint8_t), 9, context);
-    *instr = {
+    *instr = (Instrument) {
         buffer[0], // feedconn
         {
             buffer[1], // modulator characteristic
@@ -945,24 +1131,24 @@ static int ReadInstrument(Context& context, Instrument* instr) {
             buffer[7], // carrier sustain/release
             buffer[8], // carrier wave select
         },
-        (int)context.Instruments.size() // instrument index
+        (int)context->Instruments.Count // instrument index
     };
     return 0;
 }
 
-static int ReadUint7(Context& context) {
+static int ReadUint7(Context* context) {
     uint8_t b0 = 0, b1 = 0, b2 = 0, b3 = 0;
 
-    if (context.Read(&b0, sizeof(uint8_t), 1, context.UserData) != 1) return -1;
+    if (context->Read(&b0, sizeof(uint8_t), 1, context->UserData) != 1) return -1;
     if (b0 >= 128) {
         b0 &= 0b01111111;
-        if (context.Read(&b1, sizeof(uint8_t), 1, context.UserData) != 1) return -1;
+        if (context->Read(&b1, sizeof(uint8_t), 1, context->UserData) != 1) return -1;
         if (b1 >= 128) {
             b1 &= 0b01111111;
-            if (context.Read(&b2, sizeof(uint8_t), 1, context.UserData) != 1) return -1;
+            if (context->Read(&b2, sizeof(uint8_t), 1, context->UserData) != 1) return -1;
             if (b2 >= 128) {
                 b2 &= 0b01111111;
-                if (context.Read(&b3, sizeof(uint8_t), 1, context.UserData) != 1) return -1;
+                if (context->Read(&b3, sizeof(uint8_t), 1, context->UserData) != 1) return -1;
             }
         }
     }
@@ -972,7 +1158,7 @@ static int ReadUint7(Context& context) {
 
 #define DEFAULT_READBUFFER_SIZE 256
 
-static inline int AddToBuffer(Context& context, OPB_Command* buffer, int* index, OPB_Command cmd) {
+static inline int AddToBuffer(Context* context, OPB_Command* buffer, int* index, OPB_Command cmd) {
     buffer[*index] = cmd;
     (*index)++;
 
@@ -984,11 +1170,12 @@ static inline int AddToBuffer(Context& context, OPB_Command* buffer, int* index,
     return 0;
 }
 
-#define ADD_TO_BUFFER(context, buffer, index, ...) \
-    { int MACRO_CONCAT(__ret, __LINE__); \
-    if ((MACRO_CONCAT(__ret, __LINE__) = AddToBuffer(context, buffer, bufferIndex, __VA_ARGS__))) return MACRO_CONCAT(__ret, __LINE__); }
+#define ADD_TO_BUFFER_IMPL(retvar, context, buffer, index, ...) \
+    { int retvar; \
+    if ((retvar = AddToBuffer(context, buffer, bufferIndex, (OPB_Command) __VA_ARGS__))) return retvar; }
+#define ADD_TO_BUFFER(context, buffer, index, ...) ADD_TO_BUFFER_IMPL(MACRO_CONCAT(__ret, __LINE__), context, buffer, index, __VA_ARGS__)
 
-static int ReadCommand(Context& context, OPB_Command* buffer, int* bufferIndex, int mask) {
+static int ReadCommand(Context* context, OPB_Command* buffer, int* bufferIndex, int mask) {
     uint8_t baseAddr;
     READ(&baseAddr, sizeof(uint8_t), 1, context);
 
@@ -998,7 +1185,7 @@ static int ReadCommand(Context& context, OPB_Command* buffer, int* bufferIndex, 
         default: {
             uint8_t data;
             READ(&data, sizeof(uint8_t), 1, context);
-            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)addr, data, context.Time });
+            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)addr, data, context->Time });
             break;
         }
         
@@ -1017,7 +1204,7 @@ static int ReadCommand(Context& context, OPB_Command* buffer, int* bufferIndex, 
             channel &= 0b00011111;
 
             if (channel < 0 || channel >= NUM_CHANNELS) {
-                LOG("Error reading OPB command: channel " << channel << " out of range\n");
+                Log("Error reading OPB command: channel %d out of range\n", channel);
                 return OPBERR_LOGGED;
             }
 
@@ -1042,31 +1229,31 @@ static int ReadCommand(Context& context, OPB_Command* buffer, int* bufferIndex, 
                 READ(&note, sizeof(uint8_t), 1, context);
             }
 
-            if (instrIndex < 0 || instrIndex >= context.Instruments.size()) {
-                LOG("Error reading OPB command: instrument " << instrIndex << " out of range\n");
+            if (instrIndex < 0 || instrIndex >= context->Instruments.Count) {
+                Log("Error reading OPB command: instrument %d out of range\n", instrIndex);
                 return OPBERR_LOGGED;
             }
 
-            Instrument& instr = context.Instruments[instrIndex];
+            Instrument* instr = Vector_GetT(Instrument, &context->Instruments, instrIndex);
             int conn = ChannelToOffset[channel];
             int mod = OperatorOffsets[ChannelToOp[channel]];
             int car = mod + 3;
             int playOffset = ChannelToOffset[channel];
 
-            if (feedconn) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FEEDCONN + conn), (uint8_t)instr.FeedConn, context.Time });
-            if (modChr) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + mod), (uint8_t)instr.Modulator.Characteristic, context.Time });
-            if (modLvl) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + mod), modLvlData, context.Time });
-            if (modAtk) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + mod), (uint8_t)instr.Modulator.AttackDecay, context.Time });
-            if (modSus) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + mod), (uint8_t)instr.Modulator.SustainRelease, context.Time });
-            if (modWav) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + mod), (uint8_t)instr.Modulator.WaveSelect, context.Time });
-            if (carChr) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + car), (uint8_t)instr.Carrier.Characteristic, context.Time });
-            if (carLvl) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + car), carLvlData, context.Time });
-            if (carAtk) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + car), (uint8_t)instr.Carrier.AttackDecay, context.Time });
-            if (carSus) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + car), (uint8_t)instr.Carrier.SustainRelease, context.Time });
-            if (carWav) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + car), (uint8_t)instr.Carrier.WaveSelect, context.Time });
+            if (feedconn) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FEEDCONN + conn), (uint8_t)instr->FeedConn, context->Time });
+            if (modChr) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + mod), (uint8_t)instr->Modulator.Characteristic, context->Time });
+            if (modLvl) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + mod), modLvlData, context->Time });
+            if (modAtk) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + mod), (uint8_t)instr->Modulator.AttackDecay, context->Time });
+            if (modSus) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + mod), (uint8_t)instr->Modulator.SustainRelease, context->Time });
+            if (modWav) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + mod), (uint8_t)instr->Modulator.WaveSelect, context->Time });
+            if (carChr) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + car), (uint8_t)instr->Carrier.Characteristic, context->Time });
+            if (carLvl) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + car), carLvlData, context->Time });
+            if (carAtk) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + car), (uint8_t)instr->Carrier.AttackDecay, context->Time });
+            if (carSus) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + car), (uint8_t)instr->Carrier.SustainRelease, context->Time });
+            if (carWav) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + car), (uint8_t)instr->Carrier.WaveSelect, context->Time });
             if (isPlay) {
-                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FREQUENCY + playOffset), freq, context.Time });
-                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_NOTE + playOffset), note, context.Time });
+                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FREQUENCY + playOffset), freq, context->Time });
+                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_NOTE + playOffset), note, context->Time });
             }
 
             break;
@@ -1084,7 +1271,7 @@ static int ReadCommand(Context& context, OPB_Command* buffer, int* bufferIndex, 
             int channel = (baseAddr - 0xD7) + (mask != 0 ? 9 : 0);
 
             if (channel < 0 || channel >= NUM_CHANNELS) {
-                LOG("Error reading OPB command: channel " << channel << " out of range\n");
+                Log("Error reading OPB command: channel %d out of range\n", channel);
                 return OPBERR_LOGGED;
             }
 
@@ -1094,22 +1281,22 @@ static int ReadCommand(Context& context, OPB_Command* buffer, int* bufferIndex, 
             uint8_t freq = freqNote[0];
             uint8_t note = freqNote[1];
 
-            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(addr - (OPB_CMD_NOTEON - REG_FREQUENCY)), freq, context.Time });
-            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(addr - (OPB_CMD_NOTEON - REG_NOTE)), (uint8_t)(note & 0b00111111), context.Time });
+            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(addr - (OPB_CMD_NOTEON - REG_FREQUENCY)), freq, context->Time });
+            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(addr - (OPB_CMD_NOTEON - REG_NOTE)), (uint8_t)(note & 0b00111111), context->Time });
 
             if ((note & 0b01000000) != 0) {
                 // set modulator volume
                 uint8_t vol;
                 READ(&vol, sizeof(uint8_t), 1, context);
                 int reg = REG_LEVELS + OperatorOffsets[ChannelToOp[channel]];
-                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)reg, vol, context.Time });
+                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)reg, vol, context->Time });
             }
             if ((note & 0b10000000) != 0) {
                 // set carrier volume
                 uint8_t vol;
                 READ(&vol, sizeof(uint8_t), 1, context);
                 int reg = REG_LEVELS + 3 + OperatorOffsets[ChannelToOp[channel]];
-                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)reg, vol, context.Time });
+                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)reg, vol, context->Time });
             }
             break;
         }
@@ -1118,14 +1305,14 @@ static int ReadCommand(Context& context, OPB_Command* buffer, int* bufferIndex, 
     return 0;
 }
 
-static int ReadChunk(Context& context, OPB_Command* buffer, int* bufferIndex) {
+static int ReadChunk(Context* context, OPB_Command* buffer, int* bufferIndex) {
     int elapsed, loCount, hiCount;
 
     READ_UINT7(elapsed, context);
     READ_UINT7(loCount, context);
     READ_UINT7(hiCount, context);
 
-    context.Time += elapsed / 1000.0;
+    context->Time += elapsed / 1000.0;
 
     for (int i = 0; i < loCount; i++) {
         int ret = ReadCommand(context, buffer, bufferIndex, 0x0);
@@ -1139,7 +1326,7 @@ static int ReadChunk(Context& context, OPB_Command* buffer, int* bufferIndex) {
     return 0;
 }
 
-static int ReadOpbDefault(Context& context) {
+static int ReadOpbDefault(Context* context) {
     uint32_t header[3];
     READ(header, sizeof(uint32_t), 3, context);
     for (int i = 0; i < 3; i++) header[i] = FlipEndian32(header[i]);
@@ -1151,7 +1338,7 @@ static int ReadOpbDefault(Context& context) {
         Instrument instr;
         int ret = ReadInstrument(context, &instr);
         if (ret) return ret;
-        context.Instruments.push_back(instr);
+        Vector_Add(&context->Instruments, &instr);
     }
 
     OPB_Command buffer[DEFAULT_READBUFFER_SIZE];
@@ -1177,13 +1364,13 @@ typedef struct RawOpbEntry {
     uint8_t Data;
 } RawOpbEntry;
 
-static int ReadOpbRaw(Context& context) {
+static int ReadOpbRaw(Context* context) {
     double time = 0;
     RawOpbEntry buffer[RAW_READBUFFER_SIZE];
     OPB_Command commandStream[RAW_READBUFFER_SIZE];
 
     size_t itemsRead;
-    while ((itemsRead = context.Read(buffer, sizeof(RawOpbEntry), RAW_READBUFFER_SIZE, context.UserData)) > 0) {
+    while ((itemsRead = context->Read(buffer, sizeof(RawOpbEntry), RAW_READBUFFER_SIZE, context->UserData)) > 0) {
         for (int i = 0; i < itemsRead; i++) {
             time += buffer[i].Elapsed / 1000.0;
             
@@ -1200,13 +1387,13 @@ static int ReadOpbRaw(Context& context) {
     return 0;
 }
 
-static int ConvertFromOpb(Context& context) {
+static int ConvertFromOpb(Context* context) {
     uint8_t fmt;
     READ(&fmt, sizeof(uint8_t), 1, context);
 
     switch (fmt) {
     default:
-        LOG("Error reading OPB file: unknown format " << fmt << "\n");
+        Log("Error reading OPB file: unknown format %d\n", fmt);
         return OPBERR_LOGGED;
     case OPB_Format_Default:
         return ReadOpbDefault(context);
@@ -1222,7 +1409,7 @@ static size_t ReadFromFile(void* buffer, size_t elementSize, size_t elementCount
 int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverData) {
     FILE* inFile;
     if ((inFile = fopen(file, "rb")) == NULL) {
-        LOG("Couldn't open file '" << file << "' for reading\n");
+        Log("Couldn't open file '%s' for reading\n", file);
         return OPBERR_LOGGED;
     }
     int ret = OPB_BinaryToOpl(ReadFromFile, inFile, receiver, receiverData);
@@ -1231,12 +1418,34 @@ int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverD
 }
 
 int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData) {
-    Context context;
+    Context context = Context_New();
 
     context.Read = reader;
     context.Submit = receiver;
     context.UserData = readerData;
     context.ReceiverData = receiverData;
+    context.Instruments = Vector_New(sizeof(Instrument));
 
-    return ConvertFromOpb(context);
+    int ret = ConvertFromOpb(&context);
+    Context_Free(&context);
+
+    switch (ret) {
+    case OPBERR_WRITE_ERROR:
+        Log("A write error occurred while converting from OPB\n");
+        break;
+    case OPBERR_SEEK_ERROR:
+        Log("A seek error occurred while converting from OPB\n");
+        break;
+    case OPBERR_TELL_ERROR:
+        Log("A file position error occurred while converting from OPB\n");
+        break;
+    case OPBERR_READ_ERROR:
+        Log("A read error occurred while converting from OPB\n");
+        break;
+    case OPBERR_BUFFER_ERROR:
+        Log("A buffer error occurred while converting from OPB\n");
+        break;
+    }
+
+    return ret;
 }

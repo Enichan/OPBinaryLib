@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="opblib.cpp">
+    <ClCompile Include="opblib.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
