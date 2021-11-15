@@ -61,8 +61,9 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if (OPB_FileToOpl(argv[1], ReceiveOpbBuffer, NULL)) {
-        printf("Error trying to dump OPL\n");
+    int error;
+    if ((error = OPB_FileToOpl(argv[1], ReceiveOpbBuffer, NULL)) != 0) {
+        printf("Error trying to dump OPL: %s\n", OPB_GetErrorMessage(error));
         exit(EXIT_FAILURE);
     }
 }

@@ -32,4 +32,4 @@ Set `OPB_Log` to a logging implementation to get logging.
 
 ## Is this production ready?
 
-Nope
+Ish?

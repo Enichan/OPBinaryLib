@@ -1,0 +1,325 @@
+OPB - OPL Binary Music Format
+
+Code to read and write OPB files can be found in the OPBinaryLib repository on
+GitHub: https://github.com/Enichan/OPBinaryLib
+
+The type uint7+ is a special type of up to 29 bits where the first 3 bytes may
+have the top bit set to indicate another byte of data follows them. This means 
+this type can be between 1 and 4 bytes long and can contain 7, 14, 21, or 29
+bits of data. C code for reading, writing, and determining the size of an 
+uint7+ is included at the bottom of this document.
+
+All values in this format are big endian. Except for the uint7+ type which 
+starts with the low byte.
+
+If the format is "raw", the entire file after the first 8 bytes is made up of a
+stream of uint16 elapsed timestamp in milliseconds followed by uint16 OPL 
+address register and uint8 data.
+
+For more information about OPL and its registers I recommend "Programming the
+AdLib/Sound Blaster FM Music Chips Version 2.0" by Jeffrey S. Lee which you can
+find a copy of at http://bespin.org/~qz/pc-gpe/adlib.txt. This specification
+reproduces the address/function and operator offset tables from his guide here
+for convenience:
+
+   Address      Function
+   -------      ----------------------------------------------------
+     01         Test LSI / Enable waveform control
+     02         Timer 1 data
+     03         Timer 2 data
+     04         Timer control flags
+     08         Speech synthesis mode / Keyboard split note select
+   20..35       Amp Mod / Vibrato / EG type / Key Scaling / Multiple
+   40..55       Key scaling level / Operator output level
+   60..75       Attack Rate / Decay Rate
+   80..95       Sustain Level / Release Rate
+   A0..A8       Frequency (low 8 bits)
+   B0..B8       Key On / Octave / Frequency (high 2 bits)
+     BD         AM depth / Vibrato depth / Rhythm control
+   C0..C8       Feedback strength / Connection type
+   E0..F5       Wave Select
+
+   Channel        1   2   3   4   5   6   7   8   9
+   Operator 1    00  01  02  08  09  0A  10  11  12
+   Operator 2    03  04  05  0B  0C  0D  13  14  15
+
+
+
+File ID
+
+    [char*5] "OPBin"
+    [char]   Version (starting at the character '1', not 0x1)
+    [uint8]  Must be 0x0
+
+
+Header
+
+    [uint8]  Format (0 = standard, 1 = raw)
+    [uint32] Size in bytes
+    [uint32] InstrumentCount
+    [uint32] ChunkCount
+
+
+Instruments x InstrumentCount
+
+    [uint8] Feedback/connection (base reg C0)
+
+    Modulator
+
+        [uint8] Characteristic (base reg 20) (Mult, KSR, EG, VIB and AM flags)
+        [uint8] Attack/decay level (base reg 60)
+        [uint8] Sustain/release level (base reg 80)
+        [uint8] Wave select (base reg E0)
+        
+    Carrier
+    
+        [uint8] Characteristic (base reg 23) (Mult, KSR, EG, VIB and AM flags)
+        [uint8] Attack/decay level (base reg 63)
+        [uint8] Sustain/release level (base reg 83)
+        [uint8] Wave select (base reg E3)
+
+
+Chunks x ChunkCount
+
+    [uint7+] Time elapsed since last chunk (in milliseconds)
+    [uint7+] OPL_CommandCountLo
+    [uint7+] OPL_CommandCountHi
+    
+    OPL Command x OPL_CommandCountLo
+    
+        [uint8] Register
+        [uint8] Data
+        
+    OPL Command x OPL_CommandCountHi
+    
+        [uint8] Register
+        [uint8] Data
+
+
+
+OPB Command List
+
+These are marked by register addresses that are normally unused in the D0-DF 
+range and instead of data are followed by the arguments noted here.
+
+
+Hex   Function and arguments
+Val   Description
+
+D0    Set instrument
+      Arguments: uint7+ instrIndex, uint8 channelMask, uint8 mask
+
+      Sets instrument (OPL registers 20, 40, 60, 80, E0, C0) properties for the
+      specified channel according to the bits contained in the channelMask and
+      mask arguments. For each bit set in such a way write the instrument's
+      corresponding properties to the appropriate offset for the channel and
+      operator (modulator = operator 1, carrier = operator 2).
+      
+      For example, if the lower 5 bits of channelMask encodes channel 0 and bit
+      2 of the mask argument is set this indicates the instrument's modulator
+      sustain/release data should be written.
+      
+      The OPL register range for sustain/release is hex 80-95. The offset for
+      operator 1 (modulator) for the first channel (channel 0) is 0. This means
+      the instrument's modulator sustain/release date byte should be written to
+      OPL register 80 + 0 = 80.
+      
+      If the channel number if 3 (4th channel) and the 6th bit of channelMask
+      is set (carrier levels) this means that data should be written to OPL
+      register 40 + 0B = 4B, because the operator 2 (carrier) offset on the
+      4th channel is 0B.
+      
+      Because levels data is not a property of instruments, when bits 5 or 6 
+      of the channelMask argument are set the following optional arguments must
+      be read:
+      
+      uint8 modLevels, uint8 carLevels
+      
+      If bit 5 is set modLevels is read, then if bit 6 is set carLevels is read.
+      If only bit 6 is read, read only carLevels and vice versa.
+      
+      Argument descriptions:
+
+      instrIndex    Index of instrument in instrument table
+      
+      channelMask   Contains the following information in its bits:
+      
+          0-4       Channel for instrument (two-op melodic mode)
+          5         Arguments are followed by a byte describing modulator
+                    levels (OPL register 40)
+          6         Arguments are followed by a byte describing carrier levels
+                    (OPL register 40)
+          7         Set instrument feedback/connection (OPL register C0)
+           
+      mask          Contains the following information in its bits:
+      
+          0         Set instrument modulator characteristics (OPL register 20)
+          1         Set instrument modulator attack/decay (OPL register 60)
+          2         Set instrument modulator sustain/release (OPL register 80)
+          3         Set instrument modulator wave select (OPL register E0)
+          4         Set instrument carrier characteristics (OPL register 20)
+          5         Set instrument carrier attack/decay (OPL register 60)
+          6         Set instrument carrier sustain/release (OPL register 80)
+          7         Set instrument carrier wave select (OPL register E0)
+          
+      Optional arguments:
+      
+      modLevels     Data byte describing modulator levels data (OPL register
+                    40) if bit 5 of channelMask is set
+      
+      carLevels     Data byte describing carrier levels data (OPL register 40)
+                    if bit 5 of channelMask is set
+      
+D1    Play instrument
+      Arguments: uint7+ instrIndex, uint8 channelMask, uint8 mask, uint8 freq,
+                 uint8 note
+                 
+      The play instrument command functions in the same manner as the "Set
+      instrument" command. The main difference is the inclusion of the
+      freq and note arguments following the mask argument. These encode the
+      frequency (OPL register A0) and note on/off (OPL register B0) data.
+      
+      Argument descriptions:
+
+      instrIndex    Index of instrument in instrument table
+      
+      channelMask   Contains the following information in its bits:
+      
+          0-4       Channel for instrument (two-op melodic mode)
+          5         Arguments are followed by a byte describing modulator
+                    levels (OPL register 40)
+          6         Arguments are followed by a byte describing carrier levels
+                    (OPL register 40)
+          7         Set instrument feedback/connection (OPL register C0)
+           
+      mask          Contains the following information in its bits:
+      
+          0         Set instrument modulator characteristics (OPL register 20)
+          1         Set instrument modulator attack/decay (OPL register 60)
+          2         Set instrument modulator sustain/release (OPL register 80)
+          3         Set instrument modulator wave select (OPL register E0)
+          4         Set instrument carrier characteristics (OPL register 20)
+          5         Set instrument carrier attack/decay (OPL register 60)
+          6         Set instrument carrier sustain/release (OPL register 80)
+          7         Set instrument carrier wave select (OPL register E0)
+          
+      freq          Frequency data to be written to OPL register A0
+      
+      note          Note on/off data to be written to OPL register B0
+          
+      Optional arguments:
+      
+      modLevels     Data byte describing modulator levels data (OPL register
+                    40) if bit 5 of channelMask is set
+      
+      carLevels     Data byte describing carrier levels data (OPL register 40)
+                    if bit 5 of channelMask is set
+      
+D7-DF Combined note
+      Arguments: uint8 freq, uint8 note
+      
+      This command combines the data for frequency (OPL register A0) and note
+      on (OPL register B0). The top two bits of the note data, which are unused
+      in the OPL spec, encode the presence of optional arguments for modulator
+      volume and carrier volume, much like the "Set instrument" command:
+      
+      uint8 modLevels, uint8 carLevels
+      
+      The channel for the combined note is the offset of this command from
+      register D7 plus 9 channels if this command is found in the hi command
+      stream for a chunk. It can be calculated as such:
+      
+      channel = (commandValue - 0xD7) + (hi ? 9 : 0)
+      
+      Argument descriptions:
+
+      freq          Frequency data to be written to OPL register A0
+      
+      note          Note on/off data to be written to OPL register B0
+          
+      Optional arguments:
+      
+      modLevels     Data byte describing modulator levels data (OPL register
+                    40) if bit 6 of note is set
+      
+      carLevels     Data byte describing carrier levels data (OPL register 40)
+                    if bit 7 of note is set
+
+
+
+OPB uint7+ code reference (C language)
+
+Read:
+
+// returns -1 if failed, otherwise uint7+ value
+int ReadUint7(FILE* file) {
+    uint8_t b0 = 0, b1 = 0, b2 = 0, b3 = 0;
+
+    if (fread(&b0, sizeof(uint8_t), 1, file) != 1) return -1;
+    if (b0 >= 128) {
+        b0 &= 0b01111111;
+        if (fread(&b1, sizeof(uint8_t), 1, file) != 1) return -1;
+        if (b1 >= 128) {
+            b1 &= 0b01111111;
+            if (fread(&b2, sizeof(uint8_t), 1, file) != 1) return -1;
+            if (b2 >= 128) {
+                b2 &= 0b01111111;
+                if (fread(&b3, sizeof(uint8_t), 1, file) != 1) return -1;
+            }
+        }
+    }
+
+    return b0 | (b1 << 7) | (b2 << 14) | (b3 << 21);
+}
+
+Write:
+
+// returns -1 if failed, 0 otherwise
+int WriteUint7(FILE* file, uint32_t value) {
+    if (value >= 2097152) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
+        uint8_t b2 = ((value & 0b0111111100000000000000) >> 14) | 0b10000000;
+        uint8_t b3 = ((value & 0b11111111000000000000000000000) >> 21);
+        if (fwrite(&b0, sizeof(uint8_t), 1, file) < 1) return -1;
+        if (fwrite(&b1, sizeof(uint8_t), 1, file) < 1) return -1;
+        if (fwrite(&b2, sizeof(uint8_t), 1, file) < 1) return -1;
+        if (fwrite(&b3, sizeof(uint8_t), 1, file) < 1) return -1;
+    }
+    else if (value >= 16384) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
+        uint8_t b2 = (value & 0b0111111100000000000000) >> 14;
+        if (fwrite(&b0, sizeof(uint8_t), 1, file) < 1) return -1;
+        if (fwrite(&b1, sizeof(uint8_t), 1, file) < 1) return -1;
+        if (fwrite(&b2, sizeof(uint8_t), 1, file) < 1) return -1;
+    }
+    else if (value >= 128) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = (value & 0b011111110000000) >> 7;
+        if (fwrite(&b0, sizeof(uint8_t), 1, file) < 1) return -1;
+        if (fwrite(&b1, sizeof(uint8_t), 1, file) < 1) return -1;
+    }
+    else {
+        uint8_t b0 = value & 0b01111111;
+        if (fwrite(&b0, sizeof(uint8_t), 1, file) < 1) return -1;
+    }
+    return 0;
+}
+
+Size:
+
+size_t Uint7Size(uint32_t value) {
+    if (value >= 2097152) {
+        return 4;
+    }
+    else if (value >= 16384) {
+        return 3;
+    }
+    else if (value >= 128) {
+        return 2;
+    }
+    else {
+        return 1;
+    }
+}

@@ -31,12 +31,14 @@ extern "C" {
     // uncomment this for big endian architecture
     //#define OPB_BIG_ENDIAN
 
-    #define OPBERR_LOGGED 1
+    #define OPBERR_LOGGED 1 // an error occurred and what error that was has been sent to OPB_Log
     #define OPBERR_WRITE_ERROR 2
     #define OPBERR_SEEK_ERROR 3
     #define OPBERR_TELL_ERROR 4
     #define OPBERR_READ_ERROR 5
     #define OPBERR_BUFFER_ERROR 6
+    #define OPBERR_NOT_AN_OPB_FILE 7
+    #define OPBERR_VERSION_UNSUPPORTED 8
 
     typedef struct OPB_Command {
         uint16_t Addr;
@@ -49,7 +51,9 @@ extern "C" {
         OPB_Format_Raw,
     } OPB_Format;
 
-    const char* GetFormatName(OPB_Format fmt);
+    const char* OPB_GetErrorMessage(int errCode);
+
+    const char* OPB_GetFormatName(OPB_Format fmt);
 
     // must return elementCount if successful
     typedef size_t(*OPB_StreamWriter)(const void* buffer, size_t elementSize, size_t elementCount, void* context);

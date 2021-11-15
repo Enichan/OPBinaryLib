@@ -31,6 +31,10 @@
 #include <string.h>
 #include "opblib.h"
 
+#define OPB_HEADER_SIZE 7
+// OPBin1\0
+const char OPB_Header[OPB_HEADER_SIZE] = { 'O', 'P', 'B', 'i', 'n', '1', '\0' };
+
 #define VECTOR_MIN_CAPACITY 8
 #define VECTOR_PTR(vector, index) (void*)((uint8_t*)((vector)->Storage) + (index) * vector->ElementSize)
 // this only exists to make type declarations clearer
@@ -257,7 +261,7 @@ static void Log(const char* format, ...) {
     }
 }
 
-const char* GetFormatName(OPB_Format fmt) {
+const char* OPB_GetFormatName(OPB_Format fmt) {
     switch (fmt) {
     default:
         return "Default";
@@ -283,7 +287,7 @@ static inline uint16_t FlipEndian16(uint16_t val) {
 #endif
 }
 
-static int Uint7Size(uint32_t value) {
+static size_t Uint7Size(uint32_t value) {
     if (value >= 2097152) {
         return 4;
     }
@@ -494,28 +498,28 @@ static int WriteUint7(Context* context, uint32_t value) {
         uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
         uint8_t b2 = ((value & 0b0111111100000000000000) >> 14) | 0b10000000;
         uint8_t b3 = ((value & 0b11111111000000000000000000000) >> 21);
-        WRITE(&b0, sizeof(uint8_t), 1, context);
-        WRITE(&b1, sizeof(uint8_t), 1, context);
-        WRITE(&b2, sizeof(uint8_t), 1, context);
-        WRITE(&b3, sizeof(uint8_t), 1, context);
+        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b2, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b3, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
     }
     else if (value >= 16384) {
         uint8_t b0 = (value & 0b01111111) | 0b10000000;
         uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
         uint8_t b2 = (value & 0b0111111100000000000000) >> 14;
-        WRITE(&b0, sizeof(uint8_t), 1, context);
-        WRITE(&b1, sizeof(uint8_t), 1, context);
-        WRITE(&b2, sizeof(uint8_t), 1, context);
+        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b2, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
     }
     else if (value >= 128) {
         uint8_t b0 = (value & 0b01111111) | 0b10000000;
         uint8_t b1 = (value & 0b011111110000000) >> 7;
-        WRITE(&b0, sizeof(uint8_t), 1, context);
-        WRITE(&b1, sizeof(uint8_t), 1, context);
+        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
     }
     else {
         uint8_t b0 = value & 0b01111111;
-        WRITE(&b0, sizeof(uint8_t), 1, context);
+        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
     }
     return 0;
 }
@@ -683,7 +687,7 @@ static int ProcessRange(Context* context, int channel, double time, Command* com
     if ((instrChanges = CountInstrumentChanges(feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave)) > 0) {
         Instrument instr = GetInstrument(context, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave);
 
-        int size = Uint7Size(instr.Index) + 3;
+        size_t size = Uint7Size(instr.Index) + 3;
 
         if (modLevel != NULL) {
             size++;
@@ -700,7 +704,7 @@ static int ProcessRange(Context* context, int channel, double time, Command* com
             instrChanges += 2;
         }
 
-        if (size < instrChanges * 2) {
+        if ((int)size < instrChanges * 2) {
             OpbData data = { 0 };
             OpbData_WriteUint7(&data, instr.Index);
 
@@ -721,9 +725,6 @@ static int ProcessRange(Context* context, int channel, double time, Command* com
                 (carWave != NULL ? 0b10000000 : 0);
             OpbData_WriteU8(&data, mask);
 
-            if (modLevel != NULL) OpbData_WriteU8(&data, modLevel->Data);
-            if (carLevel != NULL) OpbData_WriteU8(&data, carLevel->Data);
-
             // instrument command is 0xD0
             int reg = OPB_CMD_SETINSTRUMENT;
 
@@ -734,6 +735,9 @@ static int ProcessRange(Context* context, int channel, double time, Command* com
                 // play command is 0xD1
                 reg = OPB_CMD_PLAYINSTRUMENT;
             }
+
+            if (modLevel != NULL) OpbData_WriteU8(&data, modLevel->Data);
+            if (carLevel != NULL) OpbData_WriteU8(&data, carLevel->Data);
 
             int opbIndex = (int32_t)context->DataMap.Count + 1;
             Vector_Add(&context->DataMap, &data);
@@ -925,7 +929,9 @@ static int ConvertToOpb(Context* context) {
         context->Format = OPB_Format_Default;
     }
 
-    Log("OPB format %d (%s)\n", context->Format, GetFormatName(context->Format));
+    WRITE(OPB_Header, sizeof(char), OPB_HEADER_SIZE, context);
+
+    Log("OPB format %d (%s)\n", context->Format, OPB_GetFormatName(context->Format));
 
     uint8_t fmt = (uint8_t)context->Format;
     WRITE(&fmt, sizeof(uint8_t), 1, context);
@@ -1023,7 +1029,7 @@ static int ConvertToOpb(Context* context) {
     uint32_t instrCount = FlipEndian32((uint32_t)context->Instruments.Count);
     uint32_t chunkCount = FlipEndian32(chunks);
 
-    SEEK(context, 1, SEEK_SET);
+    SEEK(context, OPB_HEADER_SIZE + 1, SEEK_SET);
     WRITE(&length, sizeof(uint32_t), 1, context);
     WRITE(&instrCount, sizeof(uint32_t), 1, context);
     WRITE(&chunkCount, sizeof(uint32_t), 1, context);
@@ -1084,22 +1090,8 @@ int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t comman
     int ret = ConvertToOpb(&context);
     Context_Free(&context);
 
-    switch (ret) {
-    case OPBERR_WRITE_ERROR:
-        Log("A write error occurred while converting to OPB\n");
-        break;
-    case OPBERR_SEEK_ERROR:
-        Log("A seek error occurred while converting to OPB\n");
-        break;
-    case OPBERR_TELL_ERROR:
-        Log("A file position error occurred while converting to OPB\n");
-        break;
-    case OPBERR_READ_ERROR:
-        Log("A read error occurred while converting to OPB\n");
-        break;
-    case OPBERR_BUFFER_ERROR:
-        Log("A buffer error occurred while converting to OPB\n");
-        break;
+    if (ret) {
+        Log("%s\n", OPB_GetErrorMessage(ret));
     }
 
     return ret;
@@ -1209,16 +1201,16 @@ static int ReadCommand(Context* context, OPB_Command* buffer, int* bufferIndex, 
             bool carSus = (mask & 0b01000000) != 0;
             bool carWav = (mask & 0b10000000) != 0;
 
-            uint8_t modLvlData = 0, carLvlData = 0;
-            if (modLvl) READ(&modLvlData, sizeof(uint8_t), 1, context);
-            if (carLvl) READ(&carLvlData, sizeof(uint8_t), 1, context);
-
             uint8_t freq = 0, note = 0;
             bool isPlay = baseAddr == OPB_CMD_PLAYINSTRUMENT;
             if (isPlay) {
                 READ(&freq, sizeof(uint8_t), 1, context);
                 READ(&note, sizeof(uint8_t), 1, context);
             }
+
+            uint8_t modLvlData = 0, carLvlData = 0;
+            if (modLvl) READ(&modLvlData, sizeof(uint8_t), 1, context);
+            if (carLvl) READ(&carLvlData, sizeof(uint8_t), 1, context);
 
             if (instrIndex < 0 || instrIndex >= context->Instruments.Count) {
                 Log("Error reading OPB command: instrument %d out of range\n", instrIndex);
@@ -1379,6 +1371,24 @@ static int ReadOpbRaw(Context* context) {
 }
 
 static int ConvertFromOpb(Context* context) {
+    char id[OPB_HEADER_SIZE + 1] = { 0 };
+    READ(id, sizeof(char), OPB_HEADER_SIZE, context);
+
+    if (strncmp(id, "OPBin", 5)) {
+        return OPBERR_NOT_AN_OPB_FILE;
+    }
+
+    switch (id[5]) {
+    case '1':
+        break;
+    default:
+        return OPBERR_VERSION_UNSUPPORTED;
+    }
+
+    if (id[6] != '\0') {
+        return OPBERR_NOT_AN_OPB_FILE;
+    }
+
     uint8_t fmt;
     READ(&fmt, sizeof(uint8_t), 1, context);
 
@@ -1420,23 +1430,37 @@ int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceive
     int ret = ConvertFromOpb(&context);
     Context_Free(&context);
 
-    switch (ret) {
-    case OPBERR_WRITE_ERROR:
-        Log("A write error occurred while converting from OPB\n");
-        break;
-    case OPBERR_SEEK_ERROR:
-        Log("A seek error occurred while converting from OPB\n");
-        break;
-    case OPBERR_TELL_ERROR:
-        Log("A file position error occurred while converting from OPB\n");
-        break;
-    case OPBERR_READ_ERROR:
-        Log("A read error occurred while converting from OPB\n");
-        break;
-    case OPBERR_BUFFER_ERROR:
-        Log("A buffer error occurred while converting from OPB\n");
-        break;
+    if (ret) {
+        Log("%s\n", OPB_GetErrorMessage(ret));
     }
 
     return ret;
+}
+
+const char* OPB_GetErrorMessage(int errCode) {
+    switch (errCode) {
+    case OPBERR_WRITE_ERROR:
+        return "A write error occurred while converting OPB";
+        break;
+    case OPBERR_SEEK_ERROR:
+        return "A seek error occurred while converting OPB";
+        break;
+    case OPBERR_TELL_ERROR:
+        return "A file position error occurred while converting OPB";
+        break;
+    case OPBERR_READ_ERROR:
+        return "A read error occurred while converting OPB";
+        break;
+    case OPBERR_BUFFER_ERROR:
+        return "A buffer error occurred while converting OPB";
+        break;
+    case OPBERR_NOT_AN_OPB_FILE:
+        return "Couldn't parse OPB file; not a valid OPB file";
+        break;
+    case OPBERR_VERSION_UNSUPPORTED:
+        return "Couldn't parse OPB file; invalid version or version unsupported";
+        break;
+    default:
+        return "Unknown OPB error";
+    }
 }
