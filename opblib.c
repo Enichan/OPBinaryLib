@@ -196,14 +196,6 @@ typedef struct OpbData OpbData;
 typedef struct Instrument Instrument;
 
 typedef struct Context {
-#ifdef __cplusplus
-// msvc whining about unscoped enums ugghhh
-#pragma warning(push)
-#pragma warning(disable : 26812)
-    Context() : DataMap({ 0 }), CommandStream({ 0 }), Instruments({ 0 }), Tracks(), Write(NULL), Seek(NULL), Tell(NULL), Read(NULL), Submit(NULL), UserData(NULL), ReceiverData(NULL), Format(OPB_Format_Default), Time(0) {}
-#pragma warning(pop)
-#endif
-
     VectorT(Command) CommandStream;
     OPB_StreamWriter Write;
     OPB_StreamSeeker Seek;
