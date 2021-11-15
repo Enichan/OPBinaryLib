@@ -49,6 +49,8 @@ extern "C" {
         OPB_Format_Raw,
     } OPB_Format;
 
+    const char* GetFormatName(OPB_Format fmt);
+
     // must return elementCount if successful
     typedef size_t(*OPB_StreamWriter)(const void* buffer, size_t elementSize, size_t elementCount, void* context);
 

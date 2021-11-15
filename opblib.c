@@ -211,7 +211,7 @@ typedef struct Context {
     void* ReceiverData;
 } Context;
 
-void Context_Free(Context* context) {
+static void Context_Free(Context* context) {
     Vector_Free(&context->CommandStream);
     Vector_Free(&context->Instruments);
     Vector_Free(&context->DataMap);
@@ -257,7 +257,7 @@ static void Log(const char* format, ...) {
     }
 }
 
-static const char* GetFormatName(OPB_Format fmt) {
+const char* GetFormatName(OPB_Format fmt) {
     switch (fmt) {
     default:
         return "Default";
@@ -409,7 +409,7 @@ typedef struct Instrument {
     int Index;
 } Instrument;
 
-Context Context_New() {
+static Context Context_New() {
     Context context;
     memset(&context, 0, sizeof(Context));
 
@@ -610,15 +610,14 @@ static int CountInstrumentChanges(Command* feedconn,
 }
 
 static int ProcessRange(Context* context, int channel, double time, Command* commands, int cmdCount, Vector* range, 
-    int start, int end // these last two are only for logging in case of error
+    int _debug_start, int _debug_end // these last two are only for logging in case of error
 ) {
-    //for (const auto& cmd : commands) {
     for (int i = 0; i < cmdCount; i++) {
         Command* cmd = commands + i;
 
         if (cmd->Time != time) {
             int timeMs = (int)(time * 1000);
-            Log("A timing error occurred at %d ms on channel %d in range %d-%d\n", timeMs, channel, start, end);
+            Log("A timing error occurred at %d ms on channel %d in range %d-%d\n", timeMs, channel, _debug_start, _debug_end);
             return OPBERR_LOGGED;
         }
     }
@@ -666,7 +665,7 @@ static int ProcessRange(Context* context, int channel, double time, Command* com
             else if (baseAddr >= 0xB0 && baseAddr <= 0xB8) {
                 if (note != NULL) {
                     int timeMs = (int)(time * 1000);
-                    Log("A decoding error occurred at %d ms on channel %d in range %d-%d\n", timeMs, channel, start, end);
+                    Log("A decoding error occurred at %d ms on channel %d in range %d-%d\n", timeMs, channel, _debug_start, _debug_end);
                     return OPBERR_LOGGED;
                 }
                 note = cmd;
@@ -1233,16 +1232,16 @@ static int ReadCommand(Context* context, OPB_Command* buffer, int* bufferIndex, 
             int playOffset = ChannelToOffset[channel];
 
             if (feedconn) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FEEDCONN + conn), (uint8_t)instr->FeedConn, context->Time });
-            if (modChr) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + mod), (uint8_t)instr->Modulator.Characteristic, context->Time });
-            if (modLvl) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + mod), modLvlData, context->Time });
-            if (modAtk) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + mod), (uint8_t)instr->Modulator.AttackDecay, context->Time });
-            if (modSus) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + mod), (uint8_t)instr->Modulator.SustainRelease, context->Time });
-            if (modWav) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + mod), (uint8_t)instr->Modulator.WaveSelect, context->Time });
-            if (carChr) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + car), (uint8_t)instr->Carrier.Characteristic, context->Time });
-            if (carLvl) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + car), carLvlData, context->Time });
-            if (carAtk) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + car), (uint8_t)instr->Carrier.AttackDecay, context->Time });
-            if (carSus) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + car), (uint8_t)instr->Carrier.SustainRelease, context->Time });
-            if (carWav) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + car), (uint8_t)instr->Carrier.WaveSelect, context->Time });
+            if (modChr)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + mod), (uint8_t)instr->Modulator.Characteristic, context->Time });
+            if (modLvl)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + mod), modLvlData, context->Time });
+            if (modAtk)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + mod), (uint8_t)instr->Modulator.AttackDecay, context->Time });
+            if (modSus)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + mod), (uint8_t)instr->Modulator.SustainRelease, context->Time });
+            if (modWav)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + mod), (uint8_t)instr->Modulator.WaveSelect, context->Time });
+            if (carChr)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + car), (uint8_t)instr->Carrier.Characteristic, context->Time });
+            if (carLvl)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + car), carLvlData, context->Time });
+            if (carAtk)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + car), (uint8_t)instr->Carrier.AttackDecay, context->Time });
+            if (carSus)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + car), (uint8_t)instr->Carrier.SustainRelease, context->Time });
+            if (carWav)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + car), (uint8_t)instr->Carrier.WaveSelect, context->Time });
             if (isPlay) {
                 ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FREQUENCY + playOffset), freq, context->Time });
                 ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_NOTE + playOffset), note, context->Time });
