@@ -32,7 +32,7 @@
 #include "opblib.h"
 
 #define VECTOR_MIN_CAPACITY 8
-#define VECTOR_PTR(vector, index) (void*)((uint8_t*)((vector)->Storage) + (index) * v->ElementSize)
+#define VECTOR_PTR(vector, index) (void*)((uint8_t*)((vector)->Storage) + (index) * vector->ElementSize)
 // this only exists to make type declarations clearer
 #define VectorT(T) Vector
 
