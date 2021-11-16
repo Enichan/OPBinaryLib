@@ -48,4 +48,4 @@ Set `OPB_Log` to a logging implementation to get logging.
 
 ## Is this production ready?
 
-Ish?
+I'm pretty confident recommending the OPB format/OPBinaryLib at this point yeah.
