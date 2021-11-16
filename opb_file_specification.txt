@@ -115,19 +115,14 @@ D0    Set instrument
       corresponding properties to the appropriate offset for the channel and
       operator (modulator = operator 1, carrier = operator 2).
       
-      For example, if the lower 5 bits of channelMask encodes channel 0 and bit
-      2 of the mask argument is set this indicates the instrument's modulator
-      sustain/release data should be written.
+      For example, if the lower 5 bits of channelMask encodes channel 1 and bit
+      2 of the mask argument is set this indicates the instrument's modulator 
+      sustain/release data should be written to the OPL chip's 2nd channel.
       
       The OPL register range for sustain/release is hex 80-95. The offset for
-      operator 1 (modulator) for the first channel (channel 0) is 0. This means
-      the instrument's modulator sustain/release date byte should be written to
-      OPL register 80 + 0 = 80.
-      
-      If the channel number if 3 (4th channel) and the 6th bit of channelMask
-      is set (carrier levels) this means that data should be written to OPL
-      register 40 + 0B = 4B, because the operator 2 (carrier) offset on the
-      4th channel is 0B.
+      operator 1 (modulator) for the second channel (channel 1) is 1. This 
+      means the instrument's modulator sustain/release date byte should be 
+      written to OPL register hex 80 + 1 = 80.
       
       Because levels data is not a property of instruments, when bits 5 or 6 
       of the channelMask argument are set the following optional arguments must
@@ -137,6 +132,11 @@ D0    Set instrument
       
       If bit 5 is set modLevels is read, then if bit 6 is set carLevels is read.
       If only bit 6 is read, read only carLevels and vice versa.
+      
+      For example, if the channel number if 3 (4th channel) and the 6th bit of 
+      channelMask is set (carrier levels) this means that data should be 
+      written to OPL register 40 + 0B = 4B, because the operator 2 (carrier) 
+      offset on the 4th channel is 0B.
       
       Argument descriptions:
 

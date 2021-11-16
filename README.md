@@ -1,7 +1,23 @@
 # OPBinaryLib
-C/C++ library for converting a stream of OPL FM synth chip commands to the OPB music format
 
-## Basic usage
+OPBinaryLib is a C/C++ library for converting a stream of OPL FM synth chip commands to the OPB music format.
+
+The OPB music format is a format that stores commands for the Yamaha OPL3 chip (Yamaha YMF262) which was used by DOS soundcards and games. It aims to reduce the size of files storing OPL command streams to close to MIDI (usually less than 2x the size of MIDI) while still being fairly straightforward to parse.
+
+Currently the best way to generate OPB files is to use the [CaptureOPL utility](https://github.com/Enichan/libADLMIDI/releases) to generate OPB files from MIDI, MUS, or XMI files. This utility uses a fork of libADLMIDI (original [here](https://github.com/Wohlstand/libADLMIDI)) to capture the OPL output from libADLMIDI's playback and encodes the stream of OPL commands as an OPB music file.
+
+TL;DR:
+
+- Download [CaptureOPL](https://github.com/Enichan/libADLMIDI/releases)
+- Use it to convert a MIDI file to OPB
+- Use opblib.c/opblib.h to convert the OPB file back to a stream of timestamped OPL3 chip commands
+- Send chip commands to one of the many available OPL chip emulators and generate samples [[1]](https://github.com/nukeykt/Nuked-OPL3)[[2]](https://github.com/rofl0r/woody-opl)[[3]](https://github.com/gtaylormb/opl3_fpga/blob/master/docs/OPL3.java)
+- Playback audio???
+- Profit!
+
+Anyone is encouraged to use the format for their own purposes, with or without the provided C code library.
+
+## Basic library usage
 
 Store your OPL commands as a contiguous array of `OPB_Command` (including the time in seconds for each command), then call `OPB_OplToFile` to write an OPB file.
 
