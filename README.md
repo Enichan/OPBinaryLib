@@ -46,6 +46,6 @@ Optionally you can pass in a `void*` pointer to user data that will be sent to t
 
 Set `OPB_Log` to a logging implementation to get logging.
 
-## Is this production ready?
+## Projects that support OPB files
 
-I'm pretty confident recommending the OPB format/OPBinaryLib at this point yeah.
+- [dos-like](https://github.com/mattiasgustavsson/dos-like) (C): dos-like is a programming library/framework, kind of like a tiny game engine, for writing games and programs with a similar feel to MS-DOS productions from the early 90s
