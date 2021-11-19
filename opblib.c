@@ -1352,8 +1352,8 @@ static int ReadOpbRaw(Context* context) {
         uint8_t* value = buffer;
 
         for (int i = 0; i < itemsRead; i++, value += RAW_ENTRY_SIZE) {
-            uint16_t elapsed = FlipEndian16(value[0] | (value[1] << 8));
-            uint16_t addr = FlipEndian16(value[2] | (value[3] << 8));
+            uint16_t elapsed = (value[0] << 8) | value[1];
+            uint16_t addr = (value[2] << 8) | value[3];
             uint8_t data = value[4];
 
             time += elapsed / 1000.0;
