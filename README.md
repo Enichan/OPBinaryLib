@@ -11,7 +11,7 @@ TL;DR:
 - Download [CaptureOPL](https://github.com/Enichan/libADLMIDI/releases)
 - Use it to convert a MIDI file to OPB
 - Use opblib.c/opblib.h to convert the OPB file back to a stream of timestamped OPL3 chip commands
-- Send chip commands to one of the many available OPL chip emulators[[1]](https://github.com/aaronsgiles/ymfm)[[2]](https://github.com/nukeykt/Nuked-OPL3)[[3]](https://github.com/rofl0r/woody-opl)[[4]](https://github.com/gtaylormb/opl3_fpga/blob/master/docs/OPL3.java) and generate samples
+- Send chip commands to one of the many available OPL chip emulators[[1]](https://github.com/aaronsgiles/ymfm)[[2]](https://github.com/nukeykt/Nuked-OPL3)[[3]](https://github.com/rofl0r/woody-opl)[[4]](https://github.com/gtaylormb/opl3_fpga/blob/master/docs/OPL3.java)[[5]](https://github.com/mattiasgustavsson/dos-like/blob/main/source/libs/opl.h) and generate samples
 - Playback audio???
 - Profit!
 
