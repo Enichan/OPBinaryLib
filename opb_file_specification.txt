@@ -122,7 +122,7 @@ D0    Set instrument
       The OPL register range for sustain/release is hex 80-95. The offset for
       operator 1 (modulator) for the second channel (channel 1) is 1. This 
       means the instrument's modulator sustain/release date byte should be 
-      written to OPL register hex 80 + 1 = 80.
+      written to OPL register hex 80 + 1 = 81.
       
       Because levels data is not a property of instruments, when bits 5 or 6 
       of the channelMask argument are set the following optional arguments must
