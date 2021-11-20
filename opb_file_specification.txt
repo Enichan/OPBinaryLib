@@ -133,7 +133,7 @@ D0    Set instrument
       If bit 5 is set modLevels is read, then if bit 6 is set carLevels is read.
       If only bit 6 is read, read only carLevels and vice versa.
       
-      For example, if the channel number if 3 (4th channel) and the 6th bit of 
+      For example, if the channel number is 3 (4th channel) and the 6th bit of 
       channelMask is set (carrier levels) this means that data should be 
       written to OPL register 40 + 0B = 4B, because the operator 2 (carrier) 
       offset on the 4th channel is 0B.
