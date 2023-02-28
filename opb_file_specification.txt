@@ -121,7 +121,7 @@ D0    Set instrument
       
       The OPL register range for sustain/release is hex 80-95. The offset for
       operator 1 (modulator) for the second channel (channel 1) is 1. This 
-      means the instrument's modulator sustain/release date byte should be 
+      means the instrument's modulator sustain/release data byte should be 
       written to OPL register hex 80 + 1 = 81.
       
       Because levels data is not a property of instruments, when bits 5 or 6 
@@ -168,7 +168,7 @@ D0    Set instrument
                     40) if bit 5 of channelMask is set
       
       carLevels     Data byte describing carrier levels data (OPL register 40)
-                    if bit 5 of channelMask is set
+                    if bit 6 of channelMask is set
       
 D1    Play instrument
       Arguments: uint7+ instrIndex, uint8 channelMask, uint8 mask, uint8 freq,
@@ -213,7 +213,7 @@ D1    Play instrument
                     40) if bit 5 of channelMask is set
       
       carLevels     Data byte describing carrier levels data (OPL register 40)
-                    if bit 5 of channelMask is set
+                    if bit 6 of channelMask is set
       
 D7-DF Combined note
       Arguments: uint8 freq, uint8 note

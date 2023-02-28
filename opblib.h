@@ -55,18 +55,34 @@ extern "C" {
 
     const char* OPB_GetFormatName(OPB_Format fmt);
 
-    // must return elementCount if successful
+    // Custom write handler of the same form as stdio.h's fwrite for writing to memory
+    // This function should write elementSize * elementCount bytes from buffer to the user-defined context object
+    // Must return elementCount if successful
     typedef size_t(*OPB_StreamWriter)(const void* buffer, size_t elementSize, size_t elementCount, void* context);
 
-    // must return 0 if successful
+    // Custom seek handler of the same form as stdio.h's fseek for writing to memory
+    // This function should change the position to write to in the user-defined context object by the number of bytes
+    // Specified by offset, relative to the specified origin which is one of 3 values:
+    //
+    // 1. Beginning of file (same as fseek's SEEK_SET)
+    // 2. Current position of the file pointer (same as fseek's SEEK_CUR)
+    // 3. End of file (same as fseek's SEEK_END)
+    //
+    // Must return 0 if successful
     typedef int (*OPB_StreamSeeker)(void* context, long offset, int origin);
     
-    // must return -1L is unsuccessful
+    // Custom tell handler of the same form as stdio.h's ftell for writing to memory
+    // This function must return the current write position for the user-defined context object
+    // Must return -1L if unsuccessful
     typedef long (*OPB_StreamTeller)(void* context);
 
-    // should return number of elements read
+    // Custom read handler of the same form as stdio.h's fread for reading from memory
+    // This function should read elementSize * elementCount bytes from the user-defined context object to buffer
+    // Should return number of elements read
     typedef size_t(*OPB_StreamReader)(void* buffer, size_t elementSize, size_t elementCount, void* context);
 
+    // Function that receives OPB_Command items read by OPB_BinaryToOpl and OPB_FileToOpl
+    // This is where you copy the OPB_Command items into a data structure or the user-defined context object
     // Should return 0 if successful. Note that the array for `commandStream` is stack allocated and must be copied!
     typedef int(*OPB_BufferReceiver)(OPB_Command* commandStream, size_t commandCount, void* context);
 
