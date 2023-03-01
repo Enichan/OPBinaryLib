@@ -1,4 +1,5 @@
 OPB - OPL Binary Music Format
+Version 1
 
 Code to read and write OPB files can be found in the OPBinaryLib repository on
 GitHub: https://github.com/Enichan/OPBinaryLib
