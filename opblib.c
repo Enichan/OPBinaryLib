@@ -57,6 +57,7 @@ static void Vector_Free(Vector* v) {
     if (v->Storage != NULL) {
         free(v->Storage);
     }
+    v->Storage = NULL;
     v->Capacity = 0;
     v->Count = 0;
 }
@@ -216,11 +217,11 @@ typedef struct Context {
 } Context;
 
 static void Context_Free(Context* context) {
-    if (context->CommandStream != NULL) { Vector_Free(&context->CommandStream); context->CommandStream = NULL; }
-    if (context->Instruments != NULL) { Vector_Free(&context->Instruments); context->Instruments = NULL; }
-    if (context->DataMap != NULL) { Vector_Free(&context->DataMap); context->DataMap = NULL; }
+    if (context->CommandStream.Storage != NULL) { Vector_Free(&context->CommandStream); }
+    if (context->Instruments.Storage != NULL) { Vector_Free(&context->Instruments); }
+    if (context->DataMap.Storage != NULL) { Vector_Free(&context->DataMap); }
     for (int i = 0; i < NUM_TRACKS; i++) {
-        if (context->Tracks[i] != NULL) { Vector_Free(&context->Tracks[i]); context->Tracks[i] = NULL; }
+        if (context->Tracks[i].Storage != NULL) { Vector_Free(&context->Tracks[i]); }
     }
 }
 
