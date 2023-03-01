@@ -1,6 +1,6 @@
 # OPBinaryLib
 
-OPBinaryLib is a C/C++ library for converting a stream of OPL FM synth chip commands to the OPB music format.
+OPBinaryLib is a C/C++ library for converting a stream of OPL FM synth chip commands to the OPB music format. A fully managed C# port called [OPBinarySharp](https://github.com/Enichan/OPBinaryLib/tree/main/OPBinarySharp) is also included in this repository.
 
 The OPB music format is a format that stores commands for the Yamaha OPL3 chip (Yamaha YMF262) which was used by DOS soundcards and games. It aims to reduce the size of files storing OPL command streams to close to MIDI (usually less than 2x the size of MIDI) while still being fairly straightforward to parse.
 
