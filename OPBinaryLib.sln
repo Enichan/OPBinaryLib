@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OPBinaryLib", "OPBinaryLib.
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DumpOPL", "DumpOPL\DumpOPL.vcxproj", "{F2C67507-A331-419A-B5A2-E91B1EB6002E}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OPB2WAV", "OPB2WAV\OPB2WAV.vcxproj", "{D73A35AD-A776-463E-9E72-EF37AD628208}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -31,6 +33,14 @@ Global
 		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Release|x64.Build.0 = Release|x64
 		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Release|x86.ActiveCfg = Release|Win32
 		{F2C67507-A331-419A-B5A2-E91B1EB6002E}.Release|x86.Build.0 = Release|Win32
+		{D73A35AD-A776-463E-9E72-EF37AD628208}.Debug|x64.ActiveCfg = Debug|x64
+		{D73A35AD-A776-463E-9E72-EF37AD628208}.Debug|x64.Build.0 = Debug|x64
+		{D73A35AD-A776-463E-9E72-EF37AD628208}.Debug|x86.ActiveCfg = Debug|Win32
+		{D73A35AD-A776-463E-9E72-EF37AD628208}.Debug|x86.Build.0 = Debug|Win32
+		{D73A35AD-A776-463E-9E72-EF37AD628208}.Release|x64.ActiveCfg = Release|x64
+		{D73A35AD-A776-463E-9E72-EF37AD628208}.Release|x64.Build.0 = Release|x64
+		{D73A35AD-A776-463E-9E72-EF37AD628208}.Release|x86.ActiveCfg = Release|Win32
+		{D73A35AD-A776-463E-9E72-EF37AD628208}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -356,6 +356,11 @@ static void OpbData_WriteU8(OpbData* data, uint32_t value) {
 #define OPB_CMD_PLAYINSTRUMENT 0xD1
 #define OPB_CMD_NOTEON 0xD7
 
+static inline bool IsSpecialCommand(int addr) {
+    addr = addr & 0xFF;
+    return addr >= 0xD0 && addr <= 0xDF;
+}
+
 #define NUM_OPERATORS 36
 static int OperatorOffsets[NUM_OPERATORS] = {
     0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
@@ -898,11 +903,21 @@ static int WriteChunk(Context* context, double elapsed, int start, int count) {
                 WRITE(&baseAddr, sizeof(uint8_t), 1, context);
 
                 if (cmd->DataIndex) {
+                    if (!IsSpecialCommand(baseAddr)) {
+                        Log("Unexpected write error. Command had DataIndex but was not an OPB command\n");
+                        return OPBERR_LOGGED;
+                    }
+
                     // opb command
                     OpbData* data = Vector_GetT(OpbData, &context->DataMap, cmd->DataIndex - 1);
                     WRITE(data->Args, sizeof(uint8_t), data->Count, context);
                 }
                 else {
+                    if (IsSpecialCommand(baseAddr)) {
+                        Log("Unexpected write error. Command was an OPB command but had no DataIndex\n");
+                        return OPBERR_LOGGED;
+                    }
+
                     // regular write
                     WRITE(&(cmd->Data), sizeof(uint8_t), 1, context);
                 }
@@ -1074,18 +1089,24 @@ int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t comman
     context.Format = format;
 
     // convert stream to internal format
+    int orderIndex = 0;
     for (int i = 0; i < commandCount; i++) {
-        const OPB_Command* src = commandStream + i;
+        const OPB_Command* source = commandStream + i;
 
-        Command cmd = {
-            src->Addr,   // OPL register
-            src->Data,   // OPL data
-            src->Time,   // Time in seconds
-            i,           // Stream index
-            0            // Data index
-        };
+        if (IsSpecialCommand(source->Addr)) {
+            Log("Illegal register 0x%03X with value 0x%02X in command stream, ignored\n", source->Addr, source->Data);
+        }
+        else {
+            Command cmd = {
+                source->Addr,   // OPL register
+                source->Data,   // OPL data
+                source->Time,   // Time in seconds
+                orderIndex++,   // Stream index
+                0               // Data index
+            };
 
-        Vector_Add(&context.CommandStream, &cmd);
+            Vector_Add(&context.CommandStream, &cmd);
+        }
     }
 
     int ret = ConvertToOpb(&context);

@@ -45,18 +45,24 @@ namespace OPBinarySharp {
             context.Format = format;
 
             // convert stream to internal format
+            int orderIndex = 0;
             for (int i = 0; i < commandStream.Count; i++) {
                 var source = commandStream[i];
 
-                var cmd = new Command() {
-                    Addr = source.Addr,                // OPL register
-                    Data = source.Data,                // OPL data
-                    Time = source.Time.TotalSeconds,   // Time in seconds
-                    OrderIndex = i,                    // Stream index
-                    DataIndex = 0                      // Data index
-                };
+                if (IsSpecialCommand(source.Addr)) {
+                    Log(string.Format("Illegal register 0x{0} with value 0x{1} in command stream, ignored", source.Addr.ToString("X3"), source.Data.ToString("X2")));
+                }
+                else {
+                    var cmd = new Command() {
+                        Addr = source.Addr,                // OPL register
+                        Data = source.Data,                // OPL data
+                        Time = source.Time.TotalSeconds,   // Time in seconds
+                        OrderIndex = orderIndex++,         // Stream index
+                        DataIndex = 0                      // Data index
+                    };
 
-                context.CommandStream.Add(cmd);
+                    context.CommandStream.Add(cmd);
+                }
             }
 
             ConvertToOpb(context);
@@ -102,6 +108,12 @@ namespace OPBinarySharp {
         private const byte opbCmdSetInstrument = 0xD0;
         private const byte opbCmdPlayInstrument = 0xD1;
         private const byte opbCmdNoteOn = 0xD7;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsSpecialCommand(int addr) {
+            addr = addr & 0xFF;
+            return addr >= 0xD0 && addr <= 0xDF;
+        }
 
         private const byte regFeedconn  = 0xC0;
         private const byte regCharacter = 0x20;
@@ -153,6 +165,10 @@ namespace OPBinarySharp {
             public double Time;
             public int OrderIndex;
             public int DataIndex;
+
+            public override string ToString() {
+                return string.Format("{2} at {3}: 0x{0} 0x{1} ({4})", Addr.ToString("X3"), Data.ToString("X2"), OrderIndex, Time, DataIndex);
+            }
         }
 #pragma warning restore 0649
 
@@ -164,7 +180,7 @@ namespace OPBinarySharp {
             public byte Arg12, Arg13, Arg14, Arg15;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static void WriteUInt7(ref OpbData data, uint value) {
+            public static void WriteUint7(ref OpbData data, uint value) {
                 if (value >= 2097152) {
                     WriteU8(ref data, (value & 0b01111111) | 0b10000000);
                     WriteU8(ref data, ((value & 0b011111110000000) >> 7) | 0b10000000);
@@ -624,7 +640,7 @@ namespace OPBinarySharp {
 
                 if ((int)size < instrChanges * 2) {
                     OpbData data = new OpbData();
-                    OpbData.WriteUInt7(ref data, (uint)instr.Index);
+                    OpbData.WriteUint7(ref data, (uint)instr.Index);
 
                     byte channelMask = (byte)(channel |
                         (modLevel.HasValue ? 0b00100000 : 0) |
@@ -806,11 +822,19 @@ namespace OPBinarySharp {
                         Write(context, baseAddr);
 
                         if (cmd.DataIndex != 0) {
+                            if (!IsSpecialCommand(baseAddr)) {
+                                throw new OPBException("Unexpected write error. Command had DataIndex but was not an OPB command");
+                            }
+
                             // opb command
                             OpbData data = context.DataMap[cmd.DataIndex - 1];
                             Write(context, data);
                         }
                         else {
+                            if (IsSpecialCommand(baseAddr)) {
+                                throw new OPBException("Unexpected write error. Command was an OPB command but had no DataIndex");
+                            }
+
                             // regular write
                             Write(context, cmd.Data);
                         }

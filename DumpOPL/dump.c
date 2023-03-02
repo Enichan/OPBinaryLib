@@ -44,7 +44,7 @@ void GetFilename(char* path, char* result, size_t maxLen) {
 }
 
 int ReceiveOpbBuffer(OPB_Command* commandStream, size_t commandCount, void* context) {
-    for (int i = 0; i < commandCount; i++) {
+    for (size_t i = 0; i < commandCount; i++) {
         printf("%1.3f: 0x%03X, 0x%02X\n", commandStream[i].Time, commandStream[i].Addr, commandStream[i].Data);
     }
     return 0;
