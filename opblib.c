@@ -432,22 +432,39 @@ static Context Context_New(void) {
     return context;
 }
 
+static bool CanCombineInstrument(Instrument* instr, Command* feedconn,
+    Command* modChar, Command* modAttack, Command* modSustain, Command* modWave,
+    Command* carChar, Command* carAttack, Command* carSustain, Command* carWave) {
+    if ((feedconn == NULL || instr->FeedConn == feedconn->Data || instr->FeedConn < 0) &&
+        (modChar == NULL || instr->Modulator.Characteristic == modChar->Data || instr->Modulator.Characteristic < 0) &&
+        (modAttack == NULL || instr->Modulator.AttackDecay == modAttack->Data || instr->Modulator.AttackDecay < 0) &&
+        (modSustain == NULL || instr->Modulator.SustainRelease == modSustain->Data || instr->Modulator.SustainRelease < 0) &&
+        (modWave == NULL || instr->Modulator.WaveSelect == modWave->Data || instr->Modulator.WaveSelect < 0) &&
+        (carChar == NULL || instr->Carrier.Characteristic == carChar->Data || instr->Carrier.Characteristic < 0) &&
+        (carAttack == NULL || instr->Carrier.AttackDecay == carAttack->Data || instr->Carrier.AttackDecay < 0) &&
+        (carSustain == NULL || instr->Carrier.SustainRelease == carSustain->Data || instr->Carrier.SustainRelease < 0) &&
+        (carWave == NULL || instr->Carrier.WaveSelect == carWave->Data) || instr->Carrier.WaveSelect < 0) {
+        instr->FeedConn = feedconn != NULL ? feedconn->Data : instr->FeedConn;
+        instr->Modulator.Characteristic = modChar != NULL ? modChar->Data : instr->Modulator.Characteristic;
+        instr->Modulator.AttackDecay = modAttack != NULL ? modAttack->Data : instr->Modulator.AttackDecay;
+        instr->Modulator.SustainRelease = modSustain != NULL ? modSustain->Data : instr->Modulator.SustainRelease;
+        instr->Modulator.WaveSelect = modWave != NULL ? modWave->Data : instr->Modulator.WaveSelect;
+        instr->Carrier.Characteristic = carChar != NULL ? carChar->Data : instr->Carrier.Characteristic;
+        instr->Carrier.AttackDecay = carAttack != NULL ? carAttack->Data : instr->Carrier.AttackDecay;
+        instr->Carrier.SustainRelease = carSustain != NULL ? carSustain->Data : instr->Carrier.SustainRelease;
+        instr->Carrier.WaveSelect = carWave != NULL ? carWave->Data : instr->Carrier.WaveSelect;
+        return true;
+    }
+    return false;
+}
+
 static Instrument GetInstrument(Context* context, Command* feedconn,
     Command* modChar, Command* modAttack, Command* modSustain, Command* modWave,
     Command* carChar, Command* carAttack, Command* carSustain, Command* carWave) {
     // find a matching instrument
     for (int i = 0; i < context->Instruments.Count; i++) {
         Instrument* instr = Vector_GetT(Instrument, &context->Instruments, i);
-
-        if ((feedconn == NULL || instr->FeedConn == feedconn->Data) &&
-            (modChar == NULL || instr->Modulator.Characteristic == modChar->Data) &&
-            (modAttack == NULL || instr->Modulator.AttackDecay == modAttack->Data) &&
-            (modSustain == NULL || instr->Modulator.SustainRelease == modSustain->Data) &&
-            (modWave == NULL || instr->Modulator.WaveSelect == modWave->Data) &&
-            (carChar == NULL || instr->Carrier.Characteristic == carChar->Data) &&
-            (carAttack == NULL || instr->Carrier.AttackDecay == carAttack->Data) &&
-            (carSustain == NULL || instr->Carrier.SustainRelease == carSustain->Data) &&
-            (carWave == NULL || instr->Carrier.WaveSelect == carWave->Data)) {
+        if (CanCombineInstrument(instr, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave)) {
             return *instr;
         }
     }

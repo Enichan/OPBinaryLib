@@ -59,6 +59,18 @@ Set `OPB_Log` to a logging implementation to get logging.
 
 The OPB2WAV converter serves as a fully documented sample for reading an OPB file, generating audio via an OPL chip emulator, and storing that as a WAV file.
 
+## How does OPBinaryLib reduce size
+
+There are two main approaches to reducing the size of a stream of OPL3 commands that OPBinaryLib uses.
+
+The first is a simple change that can be made because commands are stored in chunks, with each chunk of commands taking place at the same time. OPL commands typically store the register to write to as a 16-bit integer, with 0x00XX for the first 9 channels and 0x01XX for the final 9 channels. OPB instead stores a count of low (0x00XX) and high (0x01XX) register commands with each chunk, which means that each individual command only needs to store the low 8-bits of its register, which saves 1 byte per command, which means commands are 1/3rd the size.
+
+The second approach involves a bank of "instruments". An instrument in OPB terms is a set of 9 properties: feedback/connection, and the characteristic, attack/decay, sustain/release, and wave select properties for both the modulator and carrier. Setting all of these properties using regular commands would take up a whopping 27 bytes of storage. For each chunk of commands OPBinaryLib detects commands to set these properties for a single channel, and aggregates them into a single instrument which is stored near the start of an OPB file. Then to set the instrument for a channel, OPBinaryLib encodes a single special command (special commands use the unused 0xD0 through 0xDF registers) which is between 4 and 9 bytes long that specifies the instrument to use and which of its properties to set.
+
+Because only a subset of properties for an instrument can be set, a partial match can still use an existing instrument. Additionally, because setting an instrument's properties will often be accompanied by carrier and modulator levels (aka volume) these can optionally be encoded in the command, which saves additional bytes. Finally, because setting these properties often comes before a note command, there's another special command which sets the instrument and takes the note and frequency data, saving yet another 4 bytes.
+
+There are some additional, though somewhat less potent strategies employed to reduce size. One is the "combined note" special command which combines the note and frequency commands into one 3 byte command, saving 1 byte over performing them separately. Finally values larger than a single byte (elapsed time, instrument indices, command counts) outside the header are encoded using a variable length integer, so low values (below 128) need only 1 byte of storage instead of 2 or 4.
+
 ## Projects that support OPB files
 
 - [dos-like](https://github.com/mattiasgustavsson/dos-like) (C): dos-like is a programming library/framework, kind of like a tiny game engine, for writing games and programs with a similar feel to MS-DOS productions from the early 90s

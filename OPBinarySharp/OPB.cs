@@ -239,18 +239,32 @@ namespace OPBinarySharp {
             public Operator Carrier;
             public int Index;
 
-            public bool Equals(in Command? feedconn,
+            public bool CanCombine(out Instrument combined, in Command? feedconn,
                 in Command? modChar, in Command? modAttack, in Command? modSustain, in Command? modWave,
                 in Command? carChar, in Command? carAttack, in Command? carSustain, in Command? carWave) {
-                return (!feedconn.HasValue || FeedConn == feedconn.Value.Data) &&
-                    (!modChar.HasValue || Modulator.Characteristic == modChar.Value.Data) &&
-                    (!modAttack.HasValue || Modulator.AttackDecay == modAttack.Value.Data) &&
-                    (!modSustain.HasValue || Modulator.SustainRelease == modSustain.Value.Data) &&
-                    (!modWave.HasValue || Modulator.WaveSelect == modWave.Value.Data) &&
-                    (!carChar.HasValue || Carrier.Characteristic == carChar.Value.Data) &&
-                    (!carAttack.HasValue || Carrier.AttackDecay == carAttack.Value.Data) &&
-                    (!carSustain.HasValue || Carrier.SustainRelease == carSustain.Value.Data) &&
-                    (!carWave.HasValue || Carrier.WaveSelect == carWave.Value.Data);
+                if ((!feedconn.HasValue || FeedConn == feedconn.Value.Data || FeedConn < 0) &&
+                    (!modChar.HasValue || Modulator.Characteristic == modChar.Value.Data || Modulator.Characteristic < 0) &&
+                    (!modAttack.HasValue || Modulator.AttackDecay == modAttack.Value.Data || Modulator.AttackDecay < 0) &&
+                    (!modSustain.HasValue || Modulator.SustainRelease == modSustain.Value.Data || Modulator.SustainRelease < 0) &&
+                    (!modWave.HasValue || Modulator.WaveSelect == modWave.Value.Data || Modulator.WaveSelect < 0) &&
+                    (!carChar.HasValue || Carrier.Characteristic == carChar.Value.Data || Carrier.Characteristic < 0) &&
+                    (!carAttack.HasValue || Carrier.AttackDecay == carAttack.Value.Data || Carrier.AttackDecay < 0) &&
+                    (!carSustain.HasValue || Carrier.SustainRelease == carSustain.Value.Data || Carrier.SustainRelease < 0) &&
+                    (!carWave.HasValue || Carrier.WaveSelect == carWave.Value.Data || Carrier.WaveSelect < 0)) {
+                    combined = this;
+                    combined.FeedConn = feedconn.HasValue ? feedconn.Value.Data : FeedConn;
+                    combined.Modulator.Characteristic = modChar.HasValue ? modChar.Value.Data : Modulator.Characteristic;
+                    combined.Modulator.AttackDecay = modAttack.HasValue ? modAttack.Value.Data : Modulator.AttackDecay;
+                    combined.Modulator.SustainRelease = modSustain.HasValue ? modSustain.Value.Data : Modulator.SustainRelease;
+                    combined.Modulator.WaveSelect = modWave.HasValue ? modWave.Value.Data : Modulator.WaveSelect;
+                    combined.Carrier.Characteristic = carChar.HasValue ? carChar.Value.Data : Carrier.Characteristic;
+                    combined.Carrier.AttackDecay = carAttack.HasValue ? carAttack.Value.Data : Carrier.AttackDecay;
+                    combined.Carrier.SustainRelease = carSustain.HasValue ? carSustain.Value.Data : Carrier.SustainRelease;
+                    combined.Carrier.WaveSelect = carWave.HasValue ? carWave.Value.Data : Carrier.WaveSelect;
+                    return true;
+                }
+                combined = default(Instrument);
+                return false;
             }
         }
 
@@ -405,7 +419,9 @@ namespace OPBinarySharp {
 
             // find a matching instrument
             for (int i = 0; i < context.Instruments.Count; i++) {
-                if (context.Instruments[i].Equals(in feedconn, in modChar, in modAttack, in modSustain, in modWave, in carChar, in carAttack, in carSustain, in carWave)) {
+                Instrument combined;
+                if (context.Instruments[i].CanCombine(out combined, in feedconn, in modChar, in modAttack, in modSustain, in modWave, in carChar, in carAttack, in carSustain, in carWave)) {
+                    context.Instruments[i] = combined;
                     return context.Instruments[i];
                 }
             }
@@ -638,7 +654,7 @@ namespace OPBinarySharp {
                     instrChanges += 2;
                 }
 
-                if ((int)size < instrChanges * 2) {
+                if (size < instrChanges * 2) {
                     OpbData data = new OpbData();
                     OpbData.WriteUint7(ref data, (uint)instr.Index);
 
