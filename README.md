@@ -2,20 +2,31 @@
 
 OPBinaryLib is a C/C++ library for converting a stream of OPL FM synth chip commands to the OPB music format. A fully managed C# port called [OPBinarySharp](https://github.com/Enichan/OPBinaryLib/tree/main/OPBinarySharp) is also included in this repository.
 
-The OPB music format is a format that stores commands for the Yamaha OPL3 chip (Yamaha YMF262) which was used by DOS soundcards and games. It aims to reduce the size of files storing OPL command streams to close to MIDI (usually less than 2x the size of MIDI) while still being fairly straightforward to parse.
+The OPB music format is a format that stores commands for the Yamaha OPL3 chip (Yamaha YMF262) which was used by DOS soundcards and games. It aims to reduce the size of files storing OPL command streams to close to MIDI (usually less than 2x the size of MIDI) while still being fairly straightforward to parse. OPB files tend to be pretty close to gzip compressed VGM (VGZ) files, but don't require a complex decompression algorithm to read, and can be compressed to be far smaller than VGZ files.
+
+Anyone is encouraged to use the format for their own purposes, with or without the provided C code library.
+
+## Generating OPB files from MIDI
 
 Currently the best way to generate OPB files is to use the [CaptureOPL utility](https://github.com/Enichan/libADLMIDI/releases) to generate OPB files from MIDI, MUS, or XMI files. This utility uses a fork of libADLMIDI (original [here](https://github.com/Wohlstand/libADLMIDI)) to capture the OPL output from libADLMIDI's playback and encodes the stream of OPL commands as an OPB music file.
 
-TL;DR:
+## How to compose OPB files
 
-- Download [CaptureOPL](https://github.com/Enichan/libADLMIDI/releases)
-- Use it to convert a MIDI file to OPB
-- Use opblib.c/opblib.h to convert the OPB file back to a stream of timestamped OPL3 chip commands
+There are two ways to compose music to be turned into OPB files:
+
+### MIDI
+
+Use the [ADLplug](https://github.com/jpcima/ADLplug/releases) VST with your DAW to compose your MIDI with the same sound banks that are available in the [CaptureOPL utility](https://github.com/Enichan/libADLMIDI/releases). Once you're happy with your music use the utility to convert your MIDI to OPB.
+
+### Trackers
+
+Any OPL3 capable tracker that outputs VGM files will work, such as [Furnace](https://github.com/tildearrow/furnace/releases). Compose your OPL3 song, export to VGM, then convert to OPB.
+
+## How to program with OPB files
+
+- Use opblib.c/opblib.h to convert an OPB file back to a stream of timestamped OPL3 chip commands
 - Send chip commands to one of the many available OPL chip emulators[[1]](https://github.com/aaronsgiles/ymfm)[[2]](https://github.com/nukeykt/Nuked-OPL3)[[3]](https://github.com/rofl0r/woody-opl)[[4]](https://github.com/gtaylormb/opl3_fpga/blob/master/docs/OPL3.java)[[5]](https://github.com/mattiasgustavsson/dos-like/blob/main/source/libs/opl.h) and generate samples
-- Playback audio???
-- Profit!
-
-Anyone is encouraged to use the format for their own purposes, with or without the provided C code library.
+- Use a library like [FNA](https://fna-xna.github.io/), [MonoGame](https://www.monogame.net/), or [raylib](https://www.raylib.com/) which allow you to submit buffers of audio samples to play the sound (DynamicSoundEffectInstance in FNA/MonoGame, UpdateAudioStream in raylib)
 
 ## Basic library usage
 
@@ -45,6 +56,8 @@ int main(int argc, char* argv[]) {
 Optionally you can pass in a `void*` pointer to user data that will be sent to the receiver function as the `context` argument.
 
 Set `OPB_Log` to a logging implementation to get logging.
+
+The OPB2WAV converter serves as a fully documented sample for reading an OPB file, generating audio via an OPL chip emulator, and storing that as a WAV file.
 
 ## Projects that support OPB files
 
