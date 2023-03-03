@@ -23,10 +23,13 @@
 */
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+    typedef struct OPB_File OPB_File;
 
     // uncomment this for big endian architecture
     //#define OPB_BIG_ENDIAN
@@ -39,6 +42,9 @@ extern "C" {
     #define OPBERR_BUFFER_ERROR 6
     #define OPBERR_NOT_AN_OPB_FILE 7
     #define OPBERR_VERSION_UNSUPPORTED 8
+    #define OPBERR_OUT_OF_MEMORY 9
+    #define OPBERR_DISPOSED 10
+    #define OPBERR_INVALID_BUFFER 11
 
     typedef struct OPB_Command {
         uint16_t Addr;
@@ -60,7 +66,7 @@ extern "C" {
     // Must return elementCount if successful
     typedef size_t(*OPB_StreamWriter)(const void* buffer, size_t elementSize, size_t elementCount, void* context);
 
-    // Custom seek handler of the same form as stdio.h's fseek for writing to memory
+    // Custom seek handler of the same form as stdio.h's fseek for reading from/writing to memory
     // This function should change the position to write to in the user-defined context object by the number of bytes
     // Specified by offset, relative to the specified origin which is one of 3 values:
     //
@@ -71,7 +77,7 @@ extern "C" {
     // Must return 0 if successful
     typedef int (*OPB_StreamSeeker)(void* context, long offset, int origin);
     
-    // Custom tell handler of the same form as stdio.h's ftell for writing to memory
+    // Custom tell handler of the same form as stdio.h's ftell for reading from/writing to memory
     // This function must return the current write position for the user-defined context object
     // Must return -1L if unsuccessful
     typedef long (*OPB_StreamTeller)(void* context);
@@ -93,15 +99,66 @@ extern "C" {
     // OPL command stream to file. Returns 0 if successful.
     int OPB_OplToFile(OPB_Format format, OPB_Command* commandStream, size_t commandCount, const char* file);
 
-    // OPB binary to OPL command stream. Returns 0 if successful.
-    int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData);
-
-    // OPB file to OPL command stream. Returns 0 if successful.
-    int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverData);
-
     // OPBLib log function
     typedef void (*OPB_LogHandler)(const char* s);
     extern OPB_LogHandler OPB_Log;
+
+    // necessary typedefs
+    typedef struct OPB_Operator {
+        int16_t Characteristic;
+        int16_t AttackDecay;
+        int16_t SustainRelease;
+        int16_t WaveSelect;
+    } OPB_Operator;
+
+    typedef struct OPB_Instrument {
+        int16_t FeedConn;
+        OPB_Operator Modulator;
+        OPB_Operator Carrier;
+        size_t Index;
+    } OPB_Instrument;
+
+    typedef struct OPB_Chunk {
+        size_t LoCount;
+        size_t Count;
+        size_t Index;
+    } OPB_Chunk;
+
+    typedef struct OPB_ReadContext {
+        int UserDataDisposeType;
+        void* UserData;
+        OPB_StreamReader Read;
+        OPB_StreamSeeker Seek;
+        bool FreeInstruments;
+        OPB_Instrument* Instruments;
+        double Time;
+
+        size_t ChunkIndex;
+        OPB_Chunk CurrentChunk;
+
+        OPB_Command CommandBuffer[16];
+        int BufferCount;
+        int BufferIndex;
+
+        OPB_Format Format;
+        size_t SizeBytes;
+        size_t InstrumentCount;
+        size_t ChunkCount;
+        size_t ChunkDataOffset;
+    } OPB_ReadContext;
+
+    typedef struct OPB_File {
+        OPB_ReadContext context;
+        bool disposedValue;
+    } OPB_File;
+
+    // DEPRECATED: Use OPB_File via OPB_OpenStream
+    // OPB binary to OPL command stream. Returns 0 if successful.
+    int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData);
+
+    // DEPRECATED: Use OPB_File via OPB_OpenFile
+    // OPB file to OPL command stream. Returns 0 if successful.
+    int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverData);
 
 #ifdef __cplusplus
 }

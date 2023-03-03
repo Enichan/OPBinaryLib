@@ -31,9 +31,8 @@ using System.Threading.Tasks;
 
 namespace OPBinarySharp {
     public delegate void LogHandler(string s);
-    public delegate void BufferReceiver(OPBCommand[] commandStream, int commandCount, object context);
 
-    public static class OPB {
+    public class OPBFile : IDisposable {
         public static LogHandler LogHandler;
 
         #region Public methods
@@ -75,35 +74,28 @@ namespace OPBinarySharp {
         }
 #endif
 
-        public static void BinaryToOpl(Stream sourceStream, BufferReceiver receiver, object receiverData) {
-            var context = new ReadContext();
-
-            context.Submit = receiver;
-            context.Stream = sourceStream;
-            context.ReceiverData = receiverData;
-            context.Instruments = new List<Instrument>();
-
-            ConvertFromOpb(context);
-        }
-
         public static List<OPBCommand> BinaryToOpl(Stream sourceStream) {
-            var list = new List<OPBCommand>();
-            BinaryToOpl(sourceStream, ListReceiver, list);
-            return list;
-        }
-
-        public static void FileToOpl(string file, BufferReceiver receiver, object receiverData) {
-            using (var stream = File.OpenRead(file)) {
-                BinaryToOpl(stream, receiver, receiverData);
+            using (var opb = new OPBFile(sourceStream)) {
+                return opb.ReadToEnd();
             }
         }
 
         public static List<OPBCommand> FileToOpl(string file) {
-            var list = new List<OPBCommand>();
-            FileToOpl(file, ListReceiver, list);
-            return list;
+            using (var opb = new OPBFile(file)) {
+                return opb.ReadToEnd();
+            }
         }
-#endregion
+
+        public static OPBFile OpenStream(Stream sourceStream) {
+            var inst = new OPBFile(sourceStream);
+            OpenStream(inst, sourceStream);
+            return inst;
+        }
+
+        public static OPBFile OpenFile(string file) {
+            return OpenStream(File.OpenRead(file));
+        }
+        #endregion
 
         private const byte opbCmdSetInstrument = 0xD0;
         private const byte opbCmdPlayInstrument = 0xD1;
@@ -171,60 +163,6 @@ namespace OPBinarySharp {
             }
         }
 #pragma warning restore 0649
-
-        struct OpbData {
-            public int Count;
-            public byte Arg0,  Arg1,  Arg2,  Arg3;
-            public byte Arg4,  Arg5,  Arg6,  Arg7;
-            public byte Arg8,  Arg9,  Arg10, Arg11;
-            public byte Arg12, Arg13, Arg14, Arg15;
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static void WriteUint7(ref OpbData data, uint value) {
-                if (value >= 2097152) {
-                    WriteU8(ref data, (value & 0b01111111) | 0b10000000);
-                    WriteU8(ref data, ((value & 0b011111110000000) >> 7) | 0b10000000);
-                    WriteU8(ref data, ((value & 0b0111111100000000000000) >> 14) | 0b10000000);
-                    WriteU8(ref data, (value & 0b11111111000000000000000000000) >> 21);
-                }
-                else if (value >= 16384) {
-                    WriteU8(ref data, (value & 0b01111111) | 0b10000000);
-                    WriteU8(ref data, ((value & 0b011111110000000) >> 7) | 0b10000000);
-                    WriteU8(ref data, (value & 0b0111111100000000000000) >> 14);
-                }
-                else if (value >= 128) {
-                    WriteU8(ref data, (value & 0b01111111) | 0b10000000);
-                    WriteU8(ref data, (value & 0b011111110000000) >> 7);
-                }
-                else {
-                    WriteU8(ref data, value & 0b01111111);
-                }
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public static void WriteU8(ref OpbData data, uint value) {
-                switch (data.Count) {
-                    default:
-                        throw new OPBException("Data overflow in OpbData instance");
-                    case 0: data.Arg0 = (byte)value; data.Count++; break;
-                    case 1: data.Arg1 = (byte)value; data.Count++; break;
-                    case 2: data.Arg2 = (byte)value; data.Count++; break;
-                    case 3: data.Arg3 = (byte)value; data.Count++; break;
-                    case 4: data.Arg4 = (byte)value; data.Count++; break;
-                    case 5: data.Arg5 = (byte)value; data.Count++; break;
-                    case 6: data.Arg6 = (byte)value; data.Count++; break;
-                    case 7: data.Arg7 = (byte)value; data.Count++; break;
-                    case 8: data.Arg8 = (byte)value; data.Count++; break;
-                    case 9: data.Arg9 = (byte)value; data.Count++; break;
-                    case 10: data.Arg10 = (byte)value; data.Count++; break;
-                    case 11: data.Arg11 = (byte)value; data.Count++; break;
-                    case 12: data.Arg12 = (byte)value; data.Count++; break;
-                    case 13: data.Arg13 = (byte)value; data.Count++; break;
-                    case 14: data.Arg14 = (byte)value; data.Count++; break;
-                    case 15: data.Arg15 = (byte)value; data.Count++; break;
-                }
-            }
-        }
 
         struct Operator {
             public short Characteristic;
@@ -321,6 +259,60 @@ namespace OPBinarySharp {
         }
 
 #if !OPB_READONLY
+        struct OpbData {
+            public int Count;
+            public byte Arg0,  Arg1,  Arg2,  Arg3;
+            public byte Arg4,  Arg5,  Arg6,  Arg7;
+            public byte Arg8,  Arg9,  Arg10, Arg11;
+            public byte Arg12, Arg13, Arg14, Arg15;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static void WriteUint7(ref OpbData data, uint value) {
+                if (value >= 2097152) {
+                    WriteU8(ref data, (value & 0b01111111) | 0b10000000);
+                    WriteU8(ref data, ((value & 0b011111110000000) >> 7) | 0b10000000);
+                    WriteU8(ref data, ((value & 0b0111111100000000000000) >> 14) | 0b10000000);
+                    WriteU8(ref data, (value & 0b11111111000000000000000000000) >> 21);
+                }
+                else if (value >= 16384) {
+                    WriteU8(ref data, (value & 0b01111111) | 0b10000000);
+                    WriteU8(ref data, ((value & 0b011111110000000) >> 7) | 0b10000000);
+                    WriteU8(ref data, (value & 0b0111111100000000000000) >> 14);
+                }
+                else if (value >= 128) {
+                    WriteU8(ref data, (value & 0b01111111) | 0b10000000);
+                    WriteU8(ref data, (value & 0b011111110000000) >> 7);
+                }
+                else {
+                    WriteU8(ref data, value & 0b01111111);
+                }
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static void WriteU8(ref OpbData data, uint value) {
+                switch (data.Count) {
+                    default:
+                        throw new OPBException("Data overflow in OpbData instance");
+                    case 0: data.Arg0 = (byte)value; data.Count++; break;
+                    case 1: data.Arg1 = (byte)value; data.Count++; break;
+                    case 2: data.Arg2 = (byte)value; data.Count++; break;
+                    case 3: data.Arg3 = (byte)value; data.Count++; break;
+                    case 4: data.Arg4 = (byte)value; data.Count++; break;
+                    case 5: data.Arg5 = (byte)value; data.Count++; break;
+                    case 6: data.Arg6 = (byte)value; data.Count++; break;
+                    case 7: data.Arg7 = (byte)value; data.Count++; break;
+                    case 8: data.Arg8 = (byte)value; data.Count++; break;
+                    case 9: data.Arg9 = (byte)value; data.Count++; break;
+                    case 10: data.Arg10 = (byte)value; data.Count++; break;
+                    case 11: data.Arg11 = (byte)value; data.Count++; break;
+                    case 12: data.Arg12 = (byte)value; data.Count++; break;
+                    case 13: data.Arg13 = (byte)value; data.Count++; break;
+                    case 14: data.Arg14 = (byte)value; data.Count++; break;
+                    case 15: data.Arg15 = (byte)value; data.Count++; break;
+                }
+            }
+        }
+
         class WriteContext {
             public Stream Stream;
             public List<Instrument> Instruments;
@@ -967,15 +959,29 @@ namespace OPBinarySharp {
         }
 #endif
 
+        struct Chunk {
+            public int LoCount;
+            public int Count;
+            public int Index;
+        }
+
         class ReadContext {
             public Stream Stream;
-            public BufferReceiver Submit;
-            public List<Instrument> Instruments;
+            public Instrument[] Instruments;
             public TimeSpan Time;
-            public object ReceiverData;
 
-            public ReadContext() {
-            }
+            public int ChunkIndex;
+            public Chunk CurrentChunk;
+
+            public OPBCommand[] CommandBuffer;
+            public int BufferCount;
+            public int BufferIndex;
+
+            public OPBFormat Format;
+            public uint SizeBytes;
+            public uint InstrumentCount;
+            public uint ChunkCount;
+            public uint ChunkDataOffset;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -997,7 +1003,7 @@ namespace OPBinarySharp {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static Instrument ReadInstrument(ReadContext context) {
+        private static Instrument ReadInstrument(ReadContext context, int index) {
             var feedconn = ReadByte(context);
             var modChar = ReadByte(context);
             var modAttack = ReadByte(context);
@@ -1021,7 +1027,7 @@ namespace OPBinarySharp {
                     SustainRelease = carSustain,
                     WaveSelect = carWave,
                 },
-                Index = context.Instruments.Count
+                Index = index
             };
         }
 
@@ -1046,20 +1052,19 @@ namespace OPBinarySharp {
             return b0 | (b1 << 7) | (b2 << 14) | (b3 << 21);
         }
 
-        private const int defaultReadBufferSize = 256;
+        //private const int defaultReadBufferSize = 256;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void AddToBuffer(ReadContext context, OPBCommand[] buffer, ref int index, OPBCommand cmd) {
-            buffer[index] = cmd;
-            index++;
-
-            if (index >= defaultReadBufferSize) {
-                context.Submit(buffer, defaultReadBufferSize, context.ReceiverData);
-                index = 0;
-            }
+        private static void AddToBuffer(ReadContext context, OPBCommand cmd) {
+            context.CommandBuffer[context.BufferCount++] = cmd;
         }
 
-        private static void ReadCommand(ReadContext context, OPBCommand[] buffer, ref int bufferIndex, int mask) {
+        private static void ReadCommand(ReadContext context) {
+            int mask = context.CurrentChunk.Index >= context.CurrentChunk.LoCount ? 0x100 : 0x0;
+
+            context.CurrentChunk.Index++;
+            context.BufferCount = context.BufferIndex = 0;
+
             byte baseAddr;
             baseAddr = ReadByte(context);
 
@@ -1069,7 +1074,7 @@ namespace OPBinarySharp {
                 default: {
                         byte data;
                         data = ReadByte(context);
-                        AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)addr, data, context.Time));
+                        AddToBuffer(context, new OPBCommand((ushort)addr, data, context.Time));
                         break;
                     }
 
@@ -1114,7 +1119,7 @@ namespace OPBinarySharp {
                         if (modLvl) modLvlData = ReadByte(context);
                         if (carLvl) carLvlData = ReadByte(context);
 
-                        if (instrIndex < 0 || instrIndex >= context.Instruments.Count) {
+                        if (instrIndex < 0 || instrIndex >= context.InstrumentCount) {
                             var error = Log(string.Format("Error reading OPB command: instrument {0} out of range", TSI(instrIndex)));
                             throw new OPBException(error);
                         }
@@ -1125,20 +1130,20 @@ namespace OPBinarySharp {
                         int car = mod + 3;
                         int playOffset = channelToOffset[channel];
 
-                        if (feedconn) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regFeedconn + conn), (byte)instr.FeedConn, context.Time));
-                        if (modChr) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regCharacter + mod), (byte)instr.Modulator.Characteristic, context.Time));
-                        if (modLvl) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regLevels + mod), modLvlData, context.Time));
-                        if (modAtk) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regAttack + mod), (byte) instr.Modulator.AttackDecay, context.Time));
-                        if (modSus) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regSustain + mod), (byte) instr.Modulator.SustainRelease, context.Time));
-                        if (modWav) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regWave + mod), (byte)instr.Modulator.WaveSelect, context.Time));
-                        if (carChr) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regCharacter + car), (byte)instr.Carrier.Characteristic, context.Time));
-                        if (carLvl) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regLevels + car), carLvlData, context.Time));
-                        if (carAtk) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regAttack + car), (byte)instr.Carrier.AttackDecay, context.Time));
-                        if (carSus) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regSustain + car), (byte)instr.Carrier.SustainRelease, context.Time));
-                        if (carWav) AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regWave + car), (byte)instr.Carrier.WaveSelect, context.Time));
+                        if (feedconn) AddToBuffer(context, new OPBCommand((ushort)(regFeedconn + conn), (byte)instr.FeedConn, context.Time));
+                        if (modChr) AddToBuffer(context, new OPBCommand((ushort)(regCharacter + mod), (byte)instr.Modulator.Characteristic, context.Time));
+                        if (modLvl) AddToBuffer(context, new OPBCommand((ushort)(regLevels + mod), modLvlData, context.Time));
+                        if (modAtk) AddToBuffer(context, new OPBCommand((ushort)(regAttack + mod), (byte) instr.Modulator.AttackDecay, context.Time));
+                        if (modSus) AddToBuffer(context, new OPBCommand((ushort)(regSustain + mod), (byte) instr.Modulator.SustainRelease, context.Time));
+                        if (modWav) AddToBuffer(context, new OPBCommand((ushort)(regWave + mod), (byte)instr.Modulator.WaveSelect, context.Time));
+                        if (carChr) AddToBuffer(context, new OPBCommand((ushort)(regCharacter + car), (byte)instr.Carrier.Characteristic, context.Time));
+                        if (carLvl) AddToBuffer(context, new OPBCommand((ushort)(regLevels + car), carLvlData, context.Time));
+                        if (carAtk) AddToBuffer(context, new OPBCommand((ushort)(regAttack + car), (byte)instr.Carrier.AttackDecay, context.Time));
+                        if (carSus) AddToBuffer(context, new OPBCommand((ushort)(regSustain + car), (byte)instr.Carrier.SustainRelease, context.Time));
+                        if (carWav) AddToBuffer(context, new OPBCommand((ushort)(regWave + car), (byte)instr.Carrier.WaveSelect, context.Time));
                         if (isPlay) {
-                            AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regFrequency + playOffset), freq, context.Time));
-                            AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(regNote + playOffset), note, context.Time));
+                            AddToBuffer(context, new OPBCommand((ushort)(regFrequency + playOffset), freq, context.Time));
+                            AddToBuffer(context, new OPBCommand((ushort)(regNote + playOffset), note, context.Time));
                         }
 
                         break;
@@ -1167,109 +1172,144 @@ namespace OPBinarySharp {
                         byte freq = freqNote0;
                         byte note = freqNote1;
 
-                        AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(addr - (opbCmdNoteOn - regFrequency)), freq, context.Time));
-                        AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)(addr - (opbCmdNoteOn - regNote)), (byte)(note & 0b00111111), context.Time));
+                        AddToBuffer(context, new OPBCommand((ushort)(addr - (opbCmdNoteOn - regFrequency)), freq, context.Time));
+                        AddToBuffer(context, new OPBCommand((ushort)(addr - (opbCmdNoteOn - regNote)), (byte)(note & 0b00111111), context.Time));
 
                         if ((note & 0b01000000) != 0) {
                             // set modulator volume
                             byte vol;
                             vol = ReadByte(context);
                             int reg = regLevels + operatorOffsets[channelToOp[channel]];
-                            AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)reg, vol, context.Time));
+                            AddToBuffer(context, new OPBCommand((ushort)reg, vol, context.Time));
                         }
                         if ((note & 0b10000000) != 0) {
                             // set carrier volume
                             byte vol;
                             vol = ReadByte(context);
                             int reg = regLevels + 3 + operatorOffsets[channelToOp[channel]];
-                            AddToBuffer(context, buffer, ref bufferIndex, new OPBCommand((ushort)reg, vol, context.Time));
+                            AddToBuffer(context, new OPBCommand((ushort)reg, vol, context.Time));
                         }
                         break;
                     }
             }
         }
 
-        private static void ReadChunk(ReadContext context, OPBCommand[] buffer, ref int bufferIndex) {
-            int elapsed, loCount, hiCount;
+        private static bool ReadChunk(ReadContext context) {
+            if (context.ChunkIndex >= context.ChunkCount) {
+                return false;
+            }
 
-            elapsed = ReadUint7(context);
-            loCount = ReadUint7(context);
-            hiCount = ReadUint7(context);
+            var elapsed = ReadUint7(context);
+            var loCount = ReadUint7(context);
+            var hiCount = ReadUint7(context);
+
+            context.CurrentChunk.LoCount = loCount;
+            context.CurrentChunk.Count = loCount + hiCount;
+
+            context.CurrentChunk.Index = 0;
+            context.ChunkIndex++;
 
             context.Time += TimeSpan.FromTicks(elapsed * TimeSpan.TicksPerMillisecond);
-
-            for (int i = 0; i < loCount; i++) {
-                ReadCommand(context, buffer, ref bufferIndex, 0x0);
-            }
-            for (int i = 0; i < hiCount; i++) {
-                ReadCommand(context, buffer, ref bufferIndex, 0x100);
-            }
+            return true;
         }
 
-        private static void ReadOpbDefault(ReadContext context) {
-            ReadUint32(context);
-            var instrumentCount = ReadUint32(context);
-            var chunkCount = ReadUint32(context);
+        //private static void ReadOpbDefault(ReadContext context) {
+        //    ReadUint32(context);
+        //    var instrumentCount = ReadUint32(context);
+        //    var chunkCount = ReadUint32(context);
 
-            for (uint i = 0; i < instrumentCount; i++) {
-                context.Instruments.Add(ReadInstrument(context));
-            }
+        //    for (uint i = 0; i < instrumentCount; i++) {
+        //        context.Instruments.Add(ReadInstrument(context));
+        //    }
 
-            var buffer = new OPBCommand[defaultReadBufferSize];
-            int bufferIndex = 0;
+        //    var buffer = new OPBCommand[defaultReadBufferSize];
+        //    int bufferIndex = 0;
 
-            for (uint i = 0; i < chunkCount; i++) {
-                ReadChunk(context, buffer, ref bufferIndex);
-            }
+        //    for (uint i = 0; i < chunkCount; i++) {
+        //        //ReadChunk(context, buffer, ref bufferIndex);
+        //    }
 
-            if (bufferIndex > 0) {
-                context.Submit(buffer, bufferIndex, context.ReceiverData);
-            }
-        }
+        //    if (bufferIndex > 0) {
+        //        context.Submit(buffer, bufferIndex, context.ReceiverData);
+        //    }
+        //}
 
-        private const int rawReadBufferSize = 256;
-        private const int rawEntrySize = 5;
+        //private const int rawReadBufferSize = 256;
+        //private const int rawEntrySize = 5;
 
-        private static void ReadOpbRaw(ReadContext context) {
-            TimeSpan time = TimeSpan.Zero;
-            var buffer = new byte[rawReadBufferSize * rawEntrySize];
-            var commandStream = new OPBCommand[rawReadBufferSize];
+        //private static void ReadOpbRaw(ReadContext context) {
+        //    TimeSpan time = TimeSpan.Zero;
+        //    var buffer = new byte[rawReadBufferSize * rawEntrySize];
+        //    var commandStream = new OPBCommand[rawReadBufferSize];
 
-            int partialOffset = 0;
+        //    int partialOffset = 0;
 
-            int bytesLeft;
-            while ((bytesLeft = context.Stream.Read(buffer, partialOffset, buffer.Length - partialOffset)) > 0) {
-                bytesLeft += partialOffset;
+        //    int bytesLeft;
+        //    while ((bytesLeft = context.Stream.Read(buffer, partialOffset, buffer.Length - partialOffset)) > 0) {
+        //        bytesLeft += partialOffset;
 
-                int itemsRead = 0;
-                int dataOffset = 0;
+        //        int itemsRead = 0;
+        //        int dataOffset = 0;
 
-                while (bytesLeft >= rawEntrySize) {
-                    ushort elapsed = (ushort)((buffer[dataOffset] << 8) | buffer[dataOffset + 1]);
-                    ushort addr = (ushort)((buffer[dataOffset + 2] << 8) | buffer[dataOffset + 3]);
-                    byte data = buffer[dataOffset + 4];
+        //        while (bytesLeft >= rawEntrySize) {
+        //            ushort elapsed = (ushort)((buffer[dataOffset] << 8) | buffer[dataOffset + 1]);
+        //            ushort addr = (ushort)((buffer[dataOffset + 2] << 8) | buffer[dataOffset + 3]);
+        //            byte data = buffer[dataOffset + 4];
 
-                    time += TimeSpan.FromTicks(elapsed * TimeSpan.TicksPerMillisecond);
+        //            time += TimeSpan.FromTicks(elapsed * TimeSpan.TicksPerMillisecond);
 
-                    var cmd = new OPBCommand(addr, data, time);
-                    commandStream[itemsRead] = cmd;
+        //            var cmd = new OPBCommand(addr, data, time);
+        //            commandStream[itemsRead] = cmd;
 
-                    itemsRead++;
-                    bytesLeft -= rawEntrySize;
-                    dataOffset += rawEntrySize;
-                }
+        //            itemsRead++;
+        //            bytesLeft -= rawEntrySize;
+        //            dataOffset += rawEntrySize;
+        //        }
 
-                // copy partial item to start
-                partialOffset = bytesLeft;
-                for (int i = 0; i < partialOffset; i++, dataOffset++) {
-                    buffer[i] = buffer[dataOffset];
-                }
+        //        // copy partial item to start
+        //        partialOffset = bytesLeft;
+        //        for (int i = 0; i < partialOffset; i++, dataOffset++) {
+        //            buffer[i] = buffer[dataOffset];
+        //        }
 
-                context.Submit(commandStream, itemsRead, context.ReceiverData);
-            }
-        }
+        //        context.Submit(commandStream, itemsRead, context.ReceiverData);
+        //    }
+        //}
 
-        private static void ConvertFromOpb(ReadContext context) {
+        //private static void ConvertFromOpb(ReadContext context) {
+        //    if (ReadByte(context) != 'O' || ReadByte(context) != 'P' || ReadByte(context) != 'B' || ReadByte(context) != 'i' || ReadByte(context) != 'n') {
+        //        throw new OPBException("Couldn't parse OPB file; not a valid OPB file");
+        //    }
+
+        //    var version = ReadByte(context);
+        //    switch (version) {
+        //        case (byte)'1':
+        //            break;
+        //        default:
+        //            throw new OPBException("Couldn't parse OPB file; invalid version or version unsupported");
+        //    }
+
+        //    var terminator = ReadByte(context);
+        //    if (terminator != 0) {
+        //        throw new OPBException("Couldn't parse OPB file; not a valid OPB file");
+        //    }
+
+        //    OPBFormat fmt = (OPBFormat)ReadByte(context);
+
+        //    switch (fmt) {
+        //        default:
+        //            var error = Log(string.Format("Error reading OPB file: unknown format {0}", fmt));
+        //            throw new OPBException(error);
+        //        case OPBFormat.Default:
+        //            ReadOpbDefault(context);
+        //            break;
+        //        case OPBFormat.Raw:
+        //            ReadOpbRaw(context);
+        //            break;
+        //    }
+        //}
+
+        private static void ReadOpbHeader(ReadContext context) {
             if (ReadByte(context) != 'O' || ReadByte(context) != 'P' || ReadByte(context) != 'B' || ReadByte(context) != 'i' || ReadByte(context) != 'n') {
                 throw new OPBException("Couldn't parse OPB file; not a valid OPB file");
             }
@@ -1287,19 +1327,203 @@ namespace OPBinarySharp {
                 throw new OPBException("Couldn't parse OPB file; not a valid OPB file");
             }
 
-            OPBFormat fmt = (OPBFormat)ReadByte(context);
+            context.Format = (OPBFormat)ReadByte(context);
 
-            switch (fmt) {
+            switch (context.Format) {
                 default:
-                    var error = Log(string.Format("Error reading OPB file: unknown format {0}", fmt));
+                    var error = Log(string.Format("Error reading OPB file: unknown format {0}", context.Format));
                     throw new OPBException(error);
-                case OPBFormat.Default:
-                    ReadOpbDefault(context);
-                    break;
+
                 case OPBFormat.Raw:
-                    ReadOpbRaw(context);
                     break;
+
+                case OPBFormat.Default: {
+                        context.SizeBytes = ReadUint32(context);
+                        context.InstrumentCount = ReadUint32(context);
+                        context.ChunkCount = ReadUint32(context);
+                        break;
+                    }
             }
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool ReadRawEntry(ReadContext context, out ushort elapsed, out ushort addr, out byte data) {
+            int b0, b1, b2, b3, b4;
+
+            b0 = context.Stream.ReadByte();
+            b1 = context.Stream.ReadByte();
+            b2 = context.Stream.ReadByte();
+            b3 = context.Stream.ReadByte();
+            b4 = context.Stream.ReadByte();
+
+            if (b0 < 0 || b1 < 0 || b2 < 0 || b3 < 0 || b4 < 0) {
+                elapsed = addr = data = 0;
+                return false;
+            }
+
+            elapsed = (ushort)((b0 << 8) | b1);
+            addr = (ushort)((b2 << 8) | b3);
+            data = (byte)b4;
+
+            return true;
+        }
+
+        private static int ReadCommands(ReadContext context, OPBCommand[] buffer, int maxCommands) {
+            if (context.Instruments == null) {
+                // read header
+                ReadOpbHeader(context);
+
+                // read instruments
+                if (context.Format != OPBFormat.Raw) {
+                    context.Instruments = new Instrument[context.InstrumentCount];
+                    for (int i = 0; i < context.InstrumentCount; i++) {
+                        var instr = ReadInstrument(context, i);
+                        context.Instruments[i] = instr;
+                    }
+                }
+
+                context.ChunkDataOffset = (uint)context.Stream.Position;
+            }
+
+            int index = 0;
+
+            if (context.Format == OPBFormat.Raw) {
+                while (index < maxCommands) {
+                    ushort elapsed, addr;
+                    byte data;
+
+                    if (!ReadRawEntry(context, out elapsed, out addr, out data)) {
+                        break;
+                    }
+
+                    context.Time += TimeSpan.FromTicks(elapsed * TimeSpan.TicksPerMillisecond);
+                    buffer[index++] = new OPBCommand(addr, data, context.Time);
+                }
+            }
+            else {
+                while (index < maxCommands) {
+                    // empty command buffer first
+                    // this command buffer is used because special OPB commands generate
+                    // multiple OPL commands in one go
+                    if (context.BufferIndex < context.BufferCount) {
+                        buffer[index++] = context.CommandBuffer[context.BufferIndex++];
+                    }
+                    else {
+                        if (context.CurrentChunk.Index >= context.CurrentChunk.Count) {
+                            // read chunk header
+                            if (!ReadChunk(context)) {
+                                break;
+                            }
+                        }
+                        else {
+                            // read command into buffer
+                            ReadCommand(context);
+                        }
+                    }
+                }
+            }
+
+            return index;
+        }
+
+        private static void OpenStream(OPBFile inst, Stream sourceStream) {
+            inst.context = new ReadContext() {
+                Stream = sourceStream,
+                CommandBuffer = new OPBCommand[16],
+            };
+        }
+
+        #region Instance
+        private ReadContext context;
+        private bool disposedValue;
+
+        public OPBFile(string file)
+            : this(File.OpenRead(file)) {
+        }
+
+        public OPBFile(Stream stream) {
+            OpenStream(this, stream);
+            ReadCommands(context, null, 0); // initialize context (read header)
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CheckContextDisposed() {
+            if (disposedValue) {
+                throw new OPBException("Couldn't perform OPB_File operation; OPB_File instance was disposed");
+            }
+        }
+
+        public int Read(OPBCommand[] buffer) {
+            if (buffer == null) {
+                throw new ArgumentNullException(nameof(buffer));
+            }
+            return Read(buffer, buffer.Length);
+        }
+
+        public int Read(OPBCommand[] buffer, int count) {
+            CheckContextDisposed();
+            if (buffer == null) {
+                throw new ArgumentNullException(nameof(buffer));
+            }
+            return ReadCommands(context, buffer, count);
+        }
+
+        public List<OPBCommand> ReadToEnd() {
+            CheckContextDisposed();
+
+            var result = new List<OPBCommand>();
+            var buffer = new OPBCommand[1024];
+
+            int count;
+            while ((count = Read(buffer, buffer.Length)) > 0) {
+                for (int i = 0; i < count; i++) {
+                    result.Add(buffer[i]);
+                }
+            }
+
+            return result;
+        }
+
+        public void Reset() {
+            CheckContextDisposed();
+
+            context.Stream.Seek(context.ChunkDataOffset, SeekOrigin.Begin);
+            context.BufferCount = 0;
+            context.ChunkIndex = 0;
+            context.Time = TimeSpan.Zero;
+            context.CurrentChunk = default(Chunk);
+        }
+
+        #region IDisposable
+        protected virtual void Dispose(bool disposing) {
+            if (!disposedValue) {
+                if (disposing) {
+                    // TODO: dispose managed state (managed objects)
+                    if (context != null && context.Stream != null) {
+                        context.Stream.Dispose();
+                    }
+                    context = null;
+                }
+
+                // TODO: free unmanaged resources (unmanaged objects) and override finalizer
+                // TODO: set large fields to null
+                disposedValue = true;
+            }
+        }
+
+        // // TODO: override finalizer only if 'Dispose(bool disposing)' has code to free unmanaged resources
+        // ~OPBFile()
+        // {
+        //     // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+        //     Dispose(disposing: false);
+        // }
+
+        public void Dispose() {
+            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
+        }
+        #endregion
+        #endregion
     }
 }

@@ -27,11 +27,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <stdbool.h>
 #include <string.h>
 #include "opblib.h"
 
+#define USERDATA_DISPOSE_NONE 0
+#define USERDATA_DISPOSE_FREE 1
+#define USERDATA_DISPOSE_FCLOSE 2
+
 #define OPB_HEADER_SIZE 7
+#define OPB_DATA_START (OPB_HEADER_SIZE + 13)
+#define OPB_INSTRUMENT_SIZE 9
+
 // OPBin1\0
 const char OPB_Header[OPB_HEADER_SIZE] = { 'O', 'P', 'B', 'i', 'n', '1', '\0' };
 
@@ -157,18 +163,6 @@ static const char* GetSourceFilename(void) {
 #define NUM_CHANNELS 18
 #define NUM_TRACKS (NUM_CHANNELS + 1)
 
-#define WRITE(buffer, size, count, context) \
-    if (context->Write(buffer, size, count, context->UserData) != count) { \
-        Log("OPB write error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
-        return OPBERR_WRITE_ERROR; \
-    }
-
-#define WRITE_UINT7(context, value) \
-    if (WriteUint7(context, value)) { \
-        Log("OPB write error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
-        return OPBERR_WRITE_ERROR; \
-    }
-
 #define SEEK(context, offset, origin) \
     if (context->Seek(context->UserData, offset, origin)) { \
         Log("OPB seek error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
@@ -195,33 +189,74 @@ static const char* GetSourceFilename(void) {
 #define SUBMIT(stream, count, context) \
     if (context->Submit(stream, count, context->ReceiverData)) return OPBERR_BUFFER_ERROR
 
-typedef struct Context Context;
 typedef struct Command Command;
 typedef struct OpbData OpbData;
-typedef struct Instrument Instrument;
 
-typedef struct Context {
+static size_t ReadFromFile(void* buffer, size_t elementSize, size_t elementCount, void* context) {
+    return fread(buffer, elementSize, elementCount, (FILE*)context);
+}
+
+static int SeekInFile(void* context, long offset, int origin) {
+    return fseek((FILE*)context, offset, origin);
+}
+
+static long TellInFile(void* context) {
+    return ftell((FILE*)context);
+}
+
+#ifndef OPB_READONLY
+static size_t WriteToFile(const void* buffer, size_t elementSize, size_t elementCount, void* context) {
+    return fwrite(buffer, elementSize, elementCount, (FILE*)context);
+}
+
+#define WRITE(buffer, size, count, context) \
+    if (context->Write(buffer, size, count, context->UserData) != count) { \
+        Log("OPB write error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        return OPBERR_WRITE_ERROR; \
+    }
+
+#define WRITE_UINT7(context, value) \
+    if (WriteUint7(context, value)) { \
+        Log("OPB write error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        return OPBERR_WRITE_ERROR; \
+    }
+
+typedef struct WriteContext {
     VectorT(Command) CommandStream;
     OPB_StreamWriter Write;
     OPB_StreamSeeker Seek;
     OPB_StreamTeller Tell;
-    OPB_StreamReader Read;
-    OPB_BufferReceiver Submit;
     OPB_Format Format;
     VectorT(OpbData) DataMap;
-    VectorT(Instrument) Instruments;
+    VectorT(OPB_Instrument) Instruments;
     VectorT(Command) Tracks[NUM_TRACKS];
-    double Time;
     void* UserData;
-    void* ReceiverData;
-} Context;
+} WriteContext;
 
-static void Context_Free(Context* context) {
-    if (context->CommandStream.Storage != NULL) { Vector_Free(&context->CommandStream); }
-    if (context->Instruments.Storage != NULL) { Vector_Free(&context->Instruments); }
-    if (context->DataMap.Storage != NULL) { Vector_Free(&context->DataMap); }
+static void WriteContext_Free(WriteContext* context) {
+    Vector_Free(&context->CommandStream);
+    Vector_Free(&context->Instruments);
+    Vector_Free(&context->DataMap);
     for (int i = 0; i < NUM_TRACKS; i++) {
-        if (context->Tracks[i].Storage != NULL) { Vector_Free(&context->Tracks[i]); }
+        Vector_Free(&context->Tracks[i]);
+    }
+}
+#endif
+
+static void ReadContext_Free(OPB_ReadContext* context) {
+    if (context->Instruments != NULL) {
+        if (context->FreeInstruments) {
+            free(context->Instruments);
+        }
+        context->Instruments = NULL;
+    }
+    if (context->UserData && context->UserDataDisposeType) {
+        if (context->UserDataDisposeType == USERDATA_DISPOSE_FREE) {
+            free(context->UserData);
+        }
+        else if (context->UserDataDisposeType == USERDATA_DISPOSE_FCLOSE) {
+            fclose(context->UserData);
+        }
     }
 }
 
@@ -288,7 +323,7 @@ static inline uint16_t FlipEndian16(uint16_t val) {
 #endif
 }
 
-static size_t Uint7Size(uint32_t value) {
+static int Uint7Size(uint32_t value) {
     if (value >= 2097152) {
         return 4;
     }
@@ -311,6 +346,7 @@ typedef struct Command {
     int DataIndex;
 } Command;
 
+#ifndef OPB_READONLY
 typedef struct OpbData {
     uint32_t Count;
     uint8_t Args[16];
@@ -351,6 +387,7 @@ static void OpbData_WriteU8(OpbData* data, uint32_t value) {
     data->Args[data->Count] = (uint8_t)value;
     data->Count++;
 }
+#endif
 
 #define OPB_CMD_SETINSTRUMENT 0xD0
 #define OPB_CMD_PLAYINSTRUMENT 0xD1
@@ -404,147 +441,6 @@ static int RegisterOffsetToOpIndex(uint32_t offset) {
 #define REG_WAVE 0xE0
 #define REG_FREQUENCY 0xA0
 #define REG_NOTE 0xB0
-
-typedef struct Operator {
-    int16_t Characteristic;
-    int16_t AttackDecay;
-    int16_t SustainRelease;
-    int16_t WaveSelect;
-} Operator;
-
-typedef struct Instrument {
-    int16_t FeedConn;
-    Operator Modulator;
-    Operator Carrier;
-    int Index;
-} Instrument;
-
-static Context Context_New(void) {
-    Context context = { 0 };
-
-    context.CommandStream = Vector_New(sizeof(Command));
-    context.Instruments = Vector_New(sizeof(Instrument));
-    context.DataMap = Vector_New(sizeof(OpbData));
-    for (int i = 0; i < NUM_TRACKS; i++) {
-        context.Tracks[i] = Vector_New(sizeof(Command));
-    }
-
-    return context;
-}
-
-static bool CanCombineInstrument(Instrument* instr, Command* feedconn,
-    Command* modChar, Command* modAttack, Command* modSustain, Command* modWave,
-    Command* carChar, Command* carAttack, Command* carSustain, Command* carWave) {
-    if ((feedconn == NULL || instr->FeedConn == feedconn->Data || instr->FeedConn < 0) &&
-        (modChar == NULL || instr->Modulator.Characteristic == modChar->Data || instr->Modulator.Characteristic < 0) &&
-        (modAttack == NULL || instr->Modulator.AttackDecay == modAttack->Data || instr->Modulator.AttackDecay < 0) &&
-        (modSustain == NULL || instr->Modulator.SustainRelease == modSustain->Data || instr->Modulator.SustainRelease < 0) &&
-        (modWave == NULL || instr->Modulator.WaveSelect == modWave->Data || instr->Modulator.WaveSelect < 0) &&
-        (carChar == NULL || instr->Carrier.Characteristic == carChar->Data || instr->Carrier.Characteristic < 0) &&
-        (carAttack == NULL || instr->Carrier.AttackDecay == carAttack->Data || instr->Carrier.AttackDecay < 0) &&
-        (carSustain == NULL || instr->Carrier.SustainRelease == carSustain->Data || instr->Carrier.SustainRelease < 0) &&
-        (carWave == NULL || instr->Carrier.WaveSelect == carWave->Data) || instr->Carrier.WaveSelect < 0) {
-        instr->FeedConn = feedconn != NULL ? feedconn->Data : instr->FeedConn;
-        instr->Modulator.Characteristic = modChar != NULL ? modChar->Data : instr->Modulator.Characteristic;
-        instr->Modulator.AttackDecay = modAttack != NULL ? modAttack->Data : instr->Modulator.AttackDecay;
-        instr->Modulator.SustainRelease = modSustain != NULL ? modSustain->Data : instr->Modulator.SustainRelease;
-        instr->Modulator.WaveSelect = modWave != NULL ? modWave->Data : instr->Modulator.WaveSelect;
-        instr->Carrier.Characteristic = carChar != NULL ? carChar->Data : instr->Carrier.Characteristic;
-        instr->Carrier.AttackDecay = carAttack != NULL ? carAttack->Data : instr->Carrier.AttackDecay;
-        instr->Carrier.SustainRelease = carSustain != NULL ? carSustain->Data : instr->Carrier.SustainRelease;
-        instr->Carrier.WaveSelect = carWave != NULL ? carWave->Data : instr->Carrier.WaveSelect;
-        return true;
-    }
-    return false;
-}
-
-static Instrument GetInstrument(Context* context, Command* feedconn,
-    Command* modChar, Command* modAttack, Command* modSustain, Command* modWave,
-    Command* carChar, Command* carAttack, Command* carSustain, Command* carWave) {
-    // find a matching instrument
-    for (int i = 0; i < context->Instruments.Count; i++) {
-        Instrument* instr = Vector_GetT(Instrument, &context->Instruments, i);
-        if (CanCombineInstrument(instr, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave)) {
-            return *instr;
-        }
-    }
-
-    // no instrument found, create and store new instrument
-    Instrument instr = {
-        feedconn == NULL ? -1 : feedconn->Data,
-        {
-            modChar == NULL ? -1 : modChar->Data,
-            modAttack == NULL ? -1 : modAttack->Data,
-            modSustain == NULL ? -1 : modSustain->Data,
-            modWave == NULL ? -1 : modWave->Data,
-        },
-        {
-            carChar == NULL ? -1 : carChar->Data,
-            carAttack == NULL ? -1 : carAttack->Data,
-            carSustain == NULL ? -1 : carSustain->Data,
-            carWave == NULL ? -1 : carWave->Data,
-        },
-        (int)context->Instruments.Count
-    };
-    Vector_Add(&context->Instruments, &instr);
-    return instr;
-}
-
-static int WriteInstrument(Context* context, const Instrument* instr) {
-    uint8_t feedConn = (uint8_t)(instr->FeedConn >= 0 ? instr->FeedConn : 0);
-    uint8_t modChr = (uint8_t)(instr->Modulator.Characteristic >= 0 ? instr->Modulator.Characteristic : 0);
-    uint8_t modAtk = (uint8_t)(instr->Modulator.AttackDecay >= 0 ? instr->Modulator.AttackDecay : 0);
-    uint8_t modSus = (uint8_t)(instr->Modulator.SustainRelease >= 0 ? instr->Modulator.SustainRelease : 0);
-    uint8_t modWav = (uint8_t)(instr->Modulator.WaveSelect >= 0 ? instr->Modulator.WaveSelect : 0);
-    uint8_t carChr = (uint8_t)(instr->Carrier.Characteristic >= 0 ? instr->Carrier.Characteristic : 0);
-    uint8_t carAtk = (uint8_t)(instr->Carrier.AttackDecay >= 0 ? instr->Carrier.AttackDecay : 0);
-    uint8_t carSus = (uint8_t)(instr->Carrier.SustainRelease >= 0 ? instr->Carrier.SustainRelease : 0);
-    uint8_t carWav = (uint8_t)(instr->Carrier.WaveSelect >= 0 ? instr->Carrier.WaveSelect : 0);
-
-    WRITE(&feedConn, sizeof(uint8_t), 1, context);
-    WRITE(&modChr, sizeof(uint8_t), 1, context);
-    WRITE(&modAtk, sizeof(uint8_t), 1, context);
-    WRITE(&modSus, sizeof(uint8_t), 1, context);
-    WRITE(&modWav, sizeof(uint8_t), 1, context);
-    WRITE(&carChr, sizeof(uint8_t), 1, context);
-    WRITE(&carAtk, sizeof(uint8_t), 1, context);
-    WRITE(&carSus, sizeof(uint8_t), 1, context);
-    WRITE(&carWav, sizeof(uint8_t), 1, context);
-
-    return 0;
-}
-
-static int WriteUint7(Context* context, uint32_t value) {
-    if (value >= 2097152) {
-        uint8_t b0 = (value & 0b01111111) | 0b10000000;
-        uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
-        uint8_t b2 = ((value & 0b0111111100000000000000) >> 14) | 0b10000000;
-        uint8_t b3 = (value & 0b11111111000000000000000000000) >> 21;
-        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-        if (context->Write(&b2, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-        if (context->Write(&b3, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-    }
-    else if (value >= 16384) {
-        uint8_t b0 = (value & 0b01111111) | 0b10000000;
-        uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
-        uint8_t b2 = (value & 0b0111111100000000000000) >> 14;
-        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-        if (context->Write(&b2, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-    }
-    else if (value >= 128) {
-        uint8_t b0 = (value & 0b01111111) | 0b10000000;
-        uint8_t b1 = (value & 0b011111110000000) >> 7;
-        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-    }
-    else {
-        uint8_t b0 = value & 0b01111111;
-        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
-    }
-    return 0;
-}
 
 // returns channel for note event or -1 if not a note event
 static int IsNoteEvent(int addr) {
@@ -608,7 +504,135 @@ static int RegisterToOpIndex(int reg) {
     return -1;
 }
 
-static void SeparateTracks(Context* context) {
+#ifndef OPB_READONLY
+static WriteContext WriteContext_New(void) {
+    WriteContext context = { 0 };
+
+    context.CommandStream = Vector_New(sizeof(Command));
+    context.Instruments = Vector_New(sizeof(OPB_Instrument));
+    context.DataMap = Vector_New(sizeof(OpbData));
+    for (int i = 0; i < NUM_TRACKS; i++) {
+        context.Tracks[i] = Vector_New(sizeof(Command));
+    }
+
+    return context;
+}
+
+static bool CanCombineInstrument(OPB_Instrument* instr, Command* feedconn,
+    Command* modChar, Command* modAttack, Command* modSustain, Command* modWave,
+    Command* carChar, Command* carAttack, Command* carSustain, Command* carWave) {
+    if ((feedconn == NULL || instr->FeedConn == feedconn->Data || instr->FeedConn < 0) &&
+        (modChar == NULL || instr->Modulator.Characteristic == modChar->Data || instr->Modulator.Characteristic < 0) &&
+        (modAttack == NULL || instr->Modulator.AttackDecay == modAttack->Data || instr->Modulator.AttackDecay < 0) &&
+        (modSustain == NULL || instr->Modulator.SustainRelease == modSustain->Data || instr->Modulator.SustainRelease < 0) &&
+        (modWave == NULL || instr->Modulator.WaveSelect == modWave->Data || instr->Modulator.WaveSelect < 0) &&
+        (carChar == NULL || instr->Carrier.Characteristic == carChar->Data || instr->Carrier.Characteristic < 0) &&
+        (carAttack == NULL || instr->Carrier.AttackDecay == carAttack->Data || instr->Carrier.AttackDecay < 0) &&
+        (carSustain == NULL || instr->Carrier.SustainRelease == carSustain->Data || instr->Carrier.SustainRelease < 0) &&
+        (carWave == NULL || instr->Carrier.WaveSelect == carWave->Data) || instr->Carrier.WaveSelect < 0) {
+        instr->FeedConn = feedconn != NULL ? feedconn->Data : instr->FeedConn;
+        instr->Modulator.Characteristic = modChar != NULL ? modChar->Data : instr->Modulator.Characteristic;
+        instr->Modulator.AttackDecay = modAttack != NULL ? modAttack->Data : instr->Modulator.AttackDecay;
+        instr->Modulator.SustainRelease = modSustain != NULL ? modSustain->Data : instr->Modulator.SustainRelease;
+        instr->Modulator.WaveSelect = modWave != NULL ? modWave->Data : instr->Modulator.WaveSelect;
+        instr->Carrier.Characteristic = carChar != NULL ? carChar->Data : instr->Carrier.Characteristic;
+        instr->Carrier.AttackDecay = carAttack != NULL ? carAttack->Data : instr->Carrier.AttackDecay;
+        instr->Carrier.SustainRelease = carSustain != NULL ? carSustain->Data : instr->Carrier.SustainRelease;
+        instr->Carrier.WaveSelect = carWave != NULL ? carWave->Data : instr->Carrier.WaveSelect;
+        return true;
+    }
+    return false;
+}
+
+static OPB_Instrument GetInstrument(WriteContext* context, Command* feedconn,
+    Command* modChar, Command* modAttack, Command* modSustain, Command* modWave,
+    Command* carChar, Command* carAttack, Command* carSustain, Command* carWave) {
+    // find a matching instrument
+    for (int i = 0; i < context->Instruments.Count; i++) {
+        OPB_Instrument* instr = Vector_GetT(OPB_Instrument, &context->Instruments, i);
+        if (CanCombineInstrument(instr, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave)) {
+            return *instr;
+        }
+    }
+
+    // no instrument found, create and store new instrument
+    OPB_Instrument instr = {
+        feedconn == NULL ? -1 : feedconn->Data,
+        {
+            modChar == NULL ? -1 : modChar->Data,
+            modAttack == NULL ? -1 : modAttack->Data,
+            modSustain == NULL ? -1 : modSustain->Data,
+            modWave == NULL ? -1 : modWave->Data,
+        },
+        {
+            carChar == NULL ? -1 : carChar->Data,
+            carAttack == NULL ? -1 : carAttack->Data,
+            carSustain == NULL ? -1 : carSustain->Data,
+            carWave == NULL ? -1 : carWave->Data,
+        },
+        (int)context->Instruments.Count
+    };
+    Vector_Add(&context->Instruments, &instr);
+    return instr;
+}
+
+static int WriteInstrument(WriteContext* context, const OPB_Instrument* instr) {
+    uint8_t feedConn = (uint8_t)(instr->FeedConn >= 0 ? instr->FeedConn : 0);
+    uint8_t modChr = (uint8_t)(instr->Modulator.Characteristic >= 0 ? instr->Modulator.Characteristic : 0);
+    uint8_t modAtk = (uint8_t)(instr->Modulator.AttackDecay >= 0 ? instr->Modulator.AttackDecay : 0);
+    uint8_t modSus = (uint8_t)(instr->Modulator.SustainRelease >= 0 ? instr->Modulator.SustainRelease : 0);
+    uint8_t modWav = (uint8_t)(instr->Modulator.WaveSelect >= 0 ? instr->Modulator.WaveSelect : 0);
+    uint8_t carChr = (uint8_t)(instr->Carrier.Characteristic >= 0 ? instr->Carrier.Characteristic : 0);
+    uint8_t carAtk = (uint8_t)(instr->Carrier.AttackDecay >= 0 ? instr->Carrier.AttackDecay : 0);
+    uint8_t carSus = (uint8_t)(instr->Carrier.SustainRelease >= 0 ? instr->Carrier.SustainRelease : 0);
+    uint8_t carWav = (uint8_t)(instr->Carrier.WaveSelect >= 0 ? instr->Carrier.WaveSelect : 0);
+
+    WRITE(&feedConn, sizeof(uint8_t), 1, context);
+    WRITE(&modChr, sizeof(uint8_t), 1, context);
+    WRITE(&modAtk, sizeof(uint8_t), 1, context);
+    WRITE(&modSus, sizeof(uint8_t), 1, context);
+    WRITE(&modWav, sizeof(uint8_t), 1, context);
+    WRITE(&carChr, sizeof(uint8_t), 1, context);
+    WRITE(&carAtk, sizeof(uint8_t), 1, context);
+    WRITE(&carSus, sizeof(uint8_t), 1, context);
+    WRITE(&carWav, sizeof(uint8_t), 1, context);
+
+    return 0;
+}
+
+static int WriteUint7(WriteContext* context, uint32_t value) {
+    if (value >= 2097152) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
+        uint8_t b2 = ((value & 0b0111111100000000000000) >> 14) | 0b10000000;
+        uint8_t b3 = (value & 0b11111111000000000000000000000) >> 21;
+        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b2, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b3, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+    }
+    else if (value >= 16384) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = ((value & 0b011111110000000) >> 7) | 0b10000000;
+        uint8_t b2 = (value & 0b0111111100000000000000) >> 14;
+        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b2, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+    }
+    else if (value >= 128) {
+        uint8_t b0 = (value & 0b01111111) | 0b10000000;
+        uint8_t b1 = (value & 0b011111110000000) >> 7;
+        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+        if (context->Write(&b1, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+    }
+    else {
+        uint8_t b0 = value & 0b01111111;
+        if (context->Write(&b0, sizeof(uint8_t), 1, context->UserData) < 1) return -1;
+    }
+    return 0;
+}
+
+static void SeparateTracks(WriteContext* context) {
     for (int i = 0; i < context->CommandStream.Count; i++) {
         Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
 
@@ -635,7 +659,7 @@ static int CountInstrumentChanges(Command* feedconn,
     return count;
 }
 
-static int ProcessRange(Context* context, int channel, double time, Command* commands, int cmdCount, Vector* range, 
+static int ProcessRange(WriteContext* context, int channel, double time, Command* commands, int cmdCount, Vector* range,
     int _debug_start, int _debug_end // these last two are only for logging in case of error
 ) {
     for (int i = 0; i < cmdCount; i++) {
@@ -707,9 +731,9 @@ static int ProcessRange(Context* context, int channel, double time, Command* com
     // combine instrument data
     int instrChanges;
     if ((instrChanges = CountInstrumentChanges(feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave)) > 0) {
-        Instrument instr = GetInstrument(context, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave);
+        OPB_Instrument instr = GetInstrument(context, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave);
 
-        size_t size = Uint7Size(instr.Index) + 3;
+        int size = Uint7Size((uint32_t)instr.Index) + 3;
 
         if (modLevel != NULL) {
             size++;
@@ -728,7 +752,7 @@ static int ProcessRange(Context* context, int channel, double time, Command* com
 
         if ((int)size < instrChanges * 2) {
             OpbData data = { 0 };
-            OpbData_WriteUint7(&data, instr.Index);
+            OpbData_WriteUint7(&data, (uint32_t)instr.Index);
 
             uint8_t channelMask = channel |
                 (modLevel != NULL ? 0b00100000 : 0) |
@@ -842,7 +866,7 @@ static int ProcessRange(Context* context, int channel, double time, Command* com
     return 0;
 }
 
-static int ProcessTrack(Context* context, int channel, Vector* chOut) {
+static int ProcessTrack(WriteContext* context, int channel, Vector* chOut) {
     Vector* commands = &context->Tracks[channel];
 
     if (commands->Count == 0) {
@@ -888,7 +912,7 @@ static int ProcessTrack(Context* context, int channel, Vector* chOut) {
     return 0;
 }
 
-static int WriteChunk(Context* context, double elapsed, int start, int count) {
+static int WriteChunk(WriteContext* context, double elapsed, int start, int count) {
     uint32_t elapsedMs = (uint32_t)((elapsed * 1000) + 0.5);
     int loCount = 0;
     int hiCount = 0;
@@ -955,7 +979,7 @@ static int SortCommands(const void* a, const void* b) {
     return ((Command*)a)->OrderIndex - ((Command*)b)->OrderIndex;
 }
 
-static int ConvertToOpb(Context* context) {
+static int ConvertToOpb(WriteContext* context) {
     if (context->Format < OPB_Format_Default || context->Format > OPB_Format_Raw) {
         context->Format = OPB_Format_Default;
     }
@@ -1024,7 +1048,7 @@ static int ConvertToOpb(Context* context) {
 
     Log("Writing instrument table\n");
     for (int i = 0; i < context->Instruments.Count; i++) {
-        int ret = WriteInstrument(context, Vector_GetT(Instrument, &context->Instruments, i));
+        int ret = WriteInstrument(context, Vector_GetT(OPB_Instrument, &context->Instruments, i));
         if (ret) return ret;
     }
 
@@ -1070,18 +1094,6 @@ static int ConvertToOpb(Context* context) {
     return 0;
 }
 
-static size_t WriteToFile(const void* buffer, size_t elementSize, size_t elementCount, void* context) {
-    return fwrite(buffer, elementSize, elementCount, (FILE*)context);
-}
-
-static int SeekInFile(void* context, long offset, int origin) {
-    return fseek((FILE*)context, offset, origin);
-}
-
-static long TellInFile(void* context) {
-    return ftell((FILE*)context);
-}
-
 int OPB_OplToFile(OPB_Format format, OPB_Command* commandStream, size_t commandCount, const char* file) {
     FILE* outFile;
     if ((outFile = fopen(file, "wb")) == NULL) {
@@ -1097,7 +1109,7 @@ int OPB_OplToFile(OPB_Format format, OPB_Command* commandStream, size_t commandC
 }
 
 int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t commandCount, OPB_StreamWriter write, OPB_StreamSeeker seek, OPB_StreamTeller tell, void* userData) {
-    Context context = Context_New();
+    WriteContext context = WriteContext_New();
 
     context.Write = write;
     context.Seek = seek;
@@ -1127,7 +1139,7 @@ int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t comman
     }
 
     int ret = ConvertToOpb(&context);
-    Context_Free(&context);
+    WriteContext_Free(&context);
 
     if (ret) {
         Log("%s\n", OPB_GetErrorMessage(ret));
@@ -1135,11 +1147,12 @@ int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t comman
 
     return ret;
 }
+#endif
 
-static int ReadInstrument(Context* context, Instrument* instr) {
+static int ReadInstrument(OPB_ReadContext* context, OPB_Instrument* instr, size_t index) {
     uint8_t buffer[9];
     READ(buffer, sizeof(uint8_t), 9, context);
-    *instr = (Instrument) {
+    *instr = (OPB_Instrument) {
         buffer[0], // feedconn
         {
             buffer[1], // modulator characteristic
@@ -1153,12 +1166,12 @@ static int ReadInstrument(Context* context, Instrument* instr) {
             buffer[7], // carrier sustain/release
             buffer[8], // carrier wave select
         },
-        (int)context->Instruments.Count // instrument index
+        index // instrument index
     };
     return 0;
 }
 
-static int ReadUint7(Context* context) {
+static int ReadUint7(OPB_ReadContext* context) {
     uint8_t b0 = 0, b1 = 0, b2 = 0, b3 = 0;
 
     if (context->Read(&b0, sizeof(uint8_t), 1, context->UserData) != 1) return -1;
@@ -1178,26 +1191,16 @@ static int ReadUint7(Context* context) {
     return b0 | (b1 << 7) | (b2 << 14) | (b3 << 21);
 }
 
-#define DEFAULT_READBUFFER_SIZE 256
-
-static inline int AddToBuffer(Context* context, OPB_Command* buffer, int* index, OPB_Command cmd) {
-    buffer[*index] = cmd;
-    (*index)++;
-
-    if (*index >= DEFAULT_READBUFFER_SIZE) {
-        SUBMIT(buffer, DEFAULT_READBUFFER_SIZE, context);
-        *index = 0;
-    }
-
-    return 0;
+static inline void AddToBuffer(OPB_ReadContext* context, OPB_Command cmd) {
+    context->CommandBuffer[context->BufferCount++] = cmd;
 }
 
-#define ADD_TO_BUFFER_IMPL(retvar, context, buffer, index, ...) \
-    { int retvar; \
-    if ((retvar = AddToBuffer(context, buffer, bufferIndex, (OPB_Command) __VA_ARGS__))) return retvar; }
-#define ADD_TO_BUFFER(context, buffer, index, ...) ADD_TO_BUFFER_IMPL(MACRO_CONCAT(__ret, __LINE__), context, buffer, index, __VA_ARGS__)
+static int ReadCommand(OPB_ReadContext* context) {
+    int mask = context->CurrentChunk.Index >= context->CurrentChunk.LoCount ? 0x100 : 0x0;
+    
+    context->CurrentChunk.Index++;
+    context->BufferCount = context->BufferIndex = 0;
 
-static int ReadCommand(Context* context, OPB_Command* buffer, int* bufferIndex, int mask) {
     uint8_t baseAddr;
     READ(&baseAddr, sizeof(uint8_t), 1, context);
 
@@ -1207,7 +1210,7 @@ static int ReadCommand(Context* context, OPB_Command* buffer, int* bufferIndex, 
         default: {
             uint8_t data;
             READ(&data, sizeof(uint8_t), 1, context);
-            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)addr, data, context->Time });
+            AddToBuffer(context, (OPB_Command){ (uint16_t)addr, data, context->Time });
             break;
         }
         
@@ -1251,31 +1254,31 @@ static int ReadCommand(Context* context, OPB_Command* buffer, int* bufferIndex, 
             if (modLvl) READ(&modLvlData, sizeof(uint8_t), 1, context);
             if (carLvl) READ(&carLvlData, sizeof(uint8_t), 1, context);
 
-            if (instrIndex < 0 || instrIndex >= context->Instruments.Count) {
+            if (instrIndex < 0 || instrIndex >= context->InstrumentCount) {
                 Log("Error reading OPB command: instrument %d out of range\n", instrIndex);
                 return OPBERR_LOGGED;
             }
 
-            Instrument* instr = Vector_GetT(Instrument, &context->Instruments, instrIndex);
+            OPB_Instrument* instr = &context->Instruments[instrIndex];
             int conn = ChannelToOffset[channel];
             int mod = OperatorOffsets[ChannelToOp[channel]];
             int car = mod + 3;
             int playOffset = ChannelToOffset[channel];
 
-            if (feedconn) ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FEEDCONN + conn), (uint8_t)instr->FeedConn, context->Time });
-            if (modChr)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + mod), (uint8_t)instr->Modulator.Characteristic, context->Time });
-            if (modLvl)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + mod), modLvlData, context->Time });
-            if (modAtk)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + mod), (uint8_t)instr->Modulator.AttackDecay, context->Time });
-            if (modSus)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + mod), (uint8_t)instr->Modulator.SustainRelease, context->Time });
-            if (modWav)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + mod), (uint8_t)instr->Modulator.WaveSelect, context->Time });
-            if (carChr)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_CHARACTER + car), (uint8_t)instr->Carrier.Characteristic, context->Time });
-            if (carLvl)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_LEVELS + car), carLvlData, context->Time });
-            if (carAtk)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_ATTACK + car), (uint8_t)instr->Carrier.AttackDecay, context->Time });
-            if (carSus)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_SUSTAIN + car), (uint8_t)instr->Carrier.SustainRelease, context->Time });
-            if (carWav)   ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_WAVE + car), (uint8_t)instr->Carrier.WaveSelect, context->Time });
+            if (feedconn) AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_FEEDCONN + conn), (uint8_t)instr->FeedConn, context->Time });
+            if (modChr)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_CHARACTER + mod), (uint8_t)instr->Modulator.Characteristic, context->Time });
+            if (modLvl)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_LEVELS + mod), modLvlData, context->Time });
+            if (modAtk)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_ATTACK + mod), (uint8_t)instr->Modulator.AttackDecay, context->Time });
+            if (modSus)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_SUSTAIN + mod), (uint8_t)instr->Modulator.SustainRelease, context->Time });
+            if (modWav)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_WAVE + mod), (uint8_t)instr->Modulator.WaveSelect, context->Time });
+            if (carChr)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_CHARACTER + car), (uint8_t)instr->Carrier.Characteristic, context->Time });
+            if (carLvl)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_LEVELS + car), carLvlData, context->Time });
+            if (carAtk)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_ATTACK + car), (uint8_t)instr->Carrier.AttackDecay, context->Time });
+            if (carSus)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_SUSTAIN + car), (uint8_t)instr->Carrier.SustainRelease, context->Time });
+            if (carWav)   AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_WAVE + car), (uint8_t)instr->Carrier.WaveSelect, context->Time });
             if (isPlay) {
-                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_FREQUENCY + playOffset), freq, context->Time });
-                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(REG_NOTE + playOffset), note, context->Time });
+                AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_FREQUENCY + playOffset), freq, context->Time });
+                AddToBuffer(context, (OPB_Command){ (uint16_t)(REG_NOTE + playOffset), note, context->Time });
             }
 
             break;
@@ -1303,22 +1306,22 @@ static int ReadCommand(Context* context, OPB_Command* buffer, int* bufferIndex, 
             uint8_t freq = freqNote[0];
             uint8_t note = freqNote[1];
 
-            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(addr - (OPB_CMD_NOTEON - REG_FREQUENCY)), freq, context->Time });
-            ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)(addr - (OPB_CMD_NOTEON - REG_NOTE)), (uint8_t)(note & 0b00111111), context->Time });
+            AddToBuffer(context, (OPB_Command){ (uint16_t)(addr - (OPB_CMD_NOTEON - REG_FREQUENCY)), freq, context->Time });
+            AddToBuffer(context, (OPB_Command){ (uint16_t)(addr - (OPB_CMD_NOTEON - REG_NOTE)), (uint8_t)(note & 0b00111111), context->Time });
 
             if ((note & 0b01000000) != 0) {
                 // set modulator volume
                 uint8_t vol;
                 READ(&vol, sizeof(uint8_t), 1, context);
                 int reg = REG_LEVELS + OperatorOffsets[ChannelToOp[channel]];
-                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)reg, vol, context->Time });
+                AddToBuffer(context, (OPB_Command){ (uint16_t)reg, vol, context->Time });
             }
             if ((note & 0b10000000) != 0) {
                 // set carrier volume
                 uint8_t vol;
                 READ(&vol, sizeof(uint8_t), 1, context);
                 int reg = REG_LEVELS + 3 + OperatorOffsets[ChannelToOp[channel]];
-                ADD_TO_BUFFER(context, buffer, bufferIndex, { (uint16_t)reg, vol, context->Time });
+                AddToBuffer(context, (OPB_Command){ (uint16_t)reg, vol, context->Time });
             }
             break;
         }
@@ -1327,97 +1330,133 @@ static int ReadCommand(Context* context, OPB_Command* buffer, int* bufferIndex, 
     return 0;
 }
 
-static int ReadChunk(Context* context, OPB_Command* buffer, int* bufferIndex) {
+static int ReadChunk(OPB_ReadContext* context, bool* success) {
+    *success = false;
+    if (context->ChunkIndex >= context->ChunkCount) {
+        return 0;
+    }
+
     int elapsed, loCount, hiCount;
 
     READ_UINT7(elapsed, context);
     READ_UINT7(loCount, context);
     READ_UINT7(hiCount, context);
 
+    context->CurrentChunk.LoCount = loCount;
+    context->CurrentChunk.Count = (size_t)loCount + hiCount;
+
+    context->CurrentChunk.Index = 0;
+    context->ChunkIndex++;
+
     context->Time += elapsed / 1000.0;
 
-    for (int i = 0; i < loCount; i++) {
-        int ret = ReadCommand(context, buffer, bufferIndex, 0x0);
-        if (ret) return ret;
-    }
-    for (int i = 0; i < hiCount; i++) {
-        int ret = ReadCommand(context, buffer, bufferIndex, 0x100);
-        if (ret) return ret;
-    }
-
+    *success = true;
     return 0;
 }
 
-static int ReadOpbDefault(Context* context) {
-    uint32_t header[3];
-    READ(header, sizeof(uint32_t), 3, context);
-    for (int i = 0; i < 3; i++) header[i] = FlipEndian32(header[i]);
+//static int ReadOpbDefault(OPB_ReadContext* context) {
+//    uint32_t header[3];
+//    READ(header, sizeof(uint32_t), 3, context);
+//    for (int i = 0; i < 3; i++) header[i] = FlipEndian32(header[i]);
+//
+//    uint32_t instrumentCount = header[1];
+//    uint32_t chunkCount = header[2];
+//
+//    for (uint32_t i = 0; i < instrumentCount; i++) {
+//        OPB_Instrument instr;
+//        int ret = ReadInstrument(context, &instr);
+//        if (ret) return ret;
+//        Vector_Add(&context->Instruments, &instr);
+//    }
+//
+//    OPB_Command buffer[DEFAULT_READBUFFER_SIZE];
+//    int bufferIndex = 0;
+//
+//    for (uint32_t i = 0; i < chunkCount; i++) {
+//        int ret = ReadChunk(context, buffer, &bufferIndex);
+//        if (ret) return ret;
+//    }
+//
+//    if (bufferIndex > 0) {
+//        SUBMIT(buffer, bufferIndex, context);
+//    }
+//
+//    return 0;
+//}
+//
+//#define RAW_READBUFFER_SIZE 256
+//#define RAW_ENTRY_SIZE 5
+//
+//static int ReadOpbRaw(OPB_ReadContext* context) {
+//    double time = 0;
+//    uint8_t buffer[RAW_READBUFFER_SIZE * RAW_ENTRY_SIZE];
+//    OPB_Command commandStream[RAW_READBUFFER_SIZE];
+//
+//    size_t itemsRead;
+//    while ((itemsRead = context->Read(buffer, RAW_ENTRY_SIZE, RAW_READBUFFER_SIZE, context->UserData)) > 0) {
+//        uint8_t* value = buffer;
+//
+//        for (int i = 0; i < itemsRead; i++, value += RAW_ENTRY_SIZE) {
+//            uint16_t elapsed = (value[0] << 8) | value[1];
+//            uint16_t addr = (value[2] << 8) | value[3];
+//            uint8_t data = value[4];
+//
+//            time += elapsed / 1000.0;
+//            
+//            OPB_Command cmd = {
+//                addr,
+//                data,
+//                time
+//            };
+//            commandStream[i] = cmd;
+//        }
+//        SUBMIT(commandStream, itemsRead, context);
+//    }
+//
+//    return 0;
+//}
+//
+//static int ConvertFromOpb(OPB_ReadContext* context) {
+//    char id[OPB_HEADER_SIZE + 1] = { 0 };
+//    READ(id, sizeof(char), OPB_HEADER_SIZE, context);
+//
+//    if (strncmp(id, "OPBin", 5)) {
+//        return OPBERR_NOT_AN_OPB_FILE;
+//    }
+//
+//    switch (id[5]) {
+//    case '1':
+//        break;
+//    default:
+//        return OPBERR_VERSION_UNSUPPORTED;
+//    }
+//
+//    if (id[6] != '\0') {
+//        return OPBERR_NOT_AN_OPB_FILE;
+//    }
+//
+//    uint8_t fmt;
+//    READ(&fmt, sizeof(uint8_t), 1, context);
+//
+//    switch (fmt) {
+//    default:
+//        Log("Error reading OPB file: unknown format %d\n", fmt);
+//        return OPBERR_LOGGED;
+//    case OPB_Format_Default:
+//        return ReadOpbDefault(context);
+//    case OPB_Format_Raw:
+//        return ReadOpbRaw(context);
+//    }
+//}
 
-    uint32_t instrumentCount = header[1];
-    uint32_t chunkCount = header[2];
-
-    for (uint32_t i = 0; i < instrumentCount; i++) {
-        Instrument instr;
-        int ret = ReadInstrument(context, &instr);
-        if (ret) return ret;
-        Vector_Add(&context->Instruments, &instr);
-    }
-
-    OPB_Command buffer[DEFAULT_READBUFFER_SIZE];
-    int bufferIndex = 0;
-
-    for (uint32_t i = 0; i < chunkCount; i++) {
-        int ret = ReadChunk(context, buffer, &bufferIndex);
-        if (ret) return ret;
-    }
-
-    if (bufferIndex > 0) {
-        SUBMIT(buffer, bufferIndex, context);
-    }
-
-    return 0;
-}
-
-#define RAW_READBUFFER_SIZE 256
-#define RAW_ENTRY_SIZE 5
-
-static int ReadOpbRaw(Context* context) {
-    double time = 0;
-    uint8_t buffer[RAW_READBUFFER_SIZE * RAW_ENTRY_SIZE];
-    OPB_Command commandStream[RAW_READBUFFER_SIZE];
-
-    size_t itemsRead;
-    while ((itemsRead = context->Read(buffer, RAW_ENTRY_SIZE, RAW_READBUFFER_SIZE, context->UserData)) > 0) {
-        uint8_t* value = buffer;
-
-        for (int i = 0; i < itemsRead; i++, value += RAW_ENTRY_SIZE) {
-            uint16_t elapsed = (value[0] << 8) | value[1];
-            uint16_t addr = (value[2] << 8) | value[3];
-            uint8_t data = value[4];
-
-            time += elapsed / 1000.0;
-            
-            OPB_Command cmd = {
-                addr,
-                data,
-                time
-            };
-            commandStream[i] = cmd;
-        }
-        SUBMIT(commandStream, itemsRead, context);
-    }
-
-    return 0;
-}
-
-static int ConvertFromOpb(Context* context) {
+static int ReadOpbHeader(OPB_ReadContext* context) {
     char id[OPB_HEADER_SIZE + 1] = { 0 };
     READ(id, sizeof(char), OPB_HEADER_SIZE, context);
 
     if (strncmp(id, "OPBin", 5)) {
         return OPBERR_NOT_AN_OPB_FILE;
     }
-
+    
     switch (id[5]) {
     case '1':
         break;
@@ -1431,75 +1470,267 @@ static int ConvertFromOpb(Context* context) {
 
     uint8_t fmt;
     READ(&fmt, sizeof(uint8_t), 1, context);
+    context->Format = fmt;
 
-    switch (fmt) {
+    switch (context->Format) {
     default:
         Log("Error reading OPB file: unknown format %d\n", fmt);
         return OPBERR_LOGGED;
-    case OPB_Format_Default:
-        return ReadOpbDefault(context);
+
     case OPB_Format_Raw:
-        return ReadOpbRaw(context);
+        break;
+
+    case OPB_Format_Default: {
+        uint32_t header[3];
+        READ(header, sizeof(uint32_t), 3, context);
+        for (int i = 0; i < 3; i++) header[i] = FlipEndian32(header[i]);
+
+        context->SizeBytes = header[0];
+        context->InstrumentCount = header[1];
+        context->ChunkCount = header[2];
+        break;
+    }
+    }
+
+    return 0;
+}
+
+#define RAW_ENTRY_SIZE 5
+
+static bool ReadRawEntry(OPB_ReadContext* context, uint16_t* elapsed, uint16_t* addr, uint8_t* data) {
+    uint8_t buffer[RAW_ENTRY_SIZE];
+    if (context->Read(buffer, 1, RAW_ENTRY_SIZE, context->UserData) < RAW_ENTRY_SIZE) {
+        return false;
+    }
+
+    *elapsed = ((uint16_t)buffer[0] << 8) | (uint16_t)buffer[1];
+    *addr = ((uint16_t)buffer[2] << 8) | (uint16_t)buffer[3];
+    *data = buffer[4];
+
+    return true;
+}
+
+static int ReadCommands(OPB_ReadContext* context, OPB_Command* buffer, int maxCommands, int* commandsRead) {
+    *commandsRead = 0;
+    int ret;
+
+    if (context->Instruments == NULL) {
+        // read header
+        ret = ReadOpbHeader(context);
+        if (ret) return ret;
+
+        // read instruments
+        if (context->Format != OPB_Format_Raw) {
+            context->Instruments = calloc(context->InstrumentCount, sizeof(OPB_Instrument));
+            context->FreeInstruments = true;
+
+            if (context->Instruments == NULL) {
+                return OPBERR_OUT_OF_MEMORY;
+            }
+
+            for (size_t i = 0; i < context->InstrumentCount; i++) {
+                ret = ReadInstrument(context, &context->Instruments[i], i);
+                if (ret) return ret;
+            }
+
+            context->ChunkDataOffset = OPB_DATA_START + context->InstrumentCount * OPB_INSTRUMENT_SIZE;
+        }
+    }
+
+    int index = 0;
+
+    if (context->Format == OPB_Format_Raw) {
+        while (index < maxCommands) {
+            uint16_t elapsed, addr;
+            uint8_t data;
+
+            if (!ReadRawEntry(context, &elapsed, &addr, &data)) {
+                break;
+            }
+
+            context->Time += elapsed / 1000.0;
+            buffer[index++] = (OPB_Command){ addr, data, context->Time };
+        }
+    }
+    else {
+        while (index < maxCommands) {
+            // empty command buffer first
+            // this command buffer is used because special OPB commands generate
+            // multiple OPL commands in one go
+            if (context->BufferIndex < context->BufferCount) {
+                buffer[index++] = context->CommandBuffer[context->BufferIndex++];
+            }
+            else {
+                if (context->CurrentChunk.Index >= context->CurrentChunk.Count) {
+                    // read chunk header
+                    bool success;
+                    ret = ReadChunk(context, &success);
+                    if (ret) return ret;
+
+                    if (!success) {
+                        break;
+                    }
+                }
+                else {
+                    // read command into command buffer
+                    ret = ReadCommand(context);
+                    if (ret) return ret;
+                }
+            }
+        }
+    }
+
+    *commandsRead = index;
+    return 0;
+}
+
+// TODO: Add null checks for opb instances
+int OPB_ReadBuffer(OPB_File* opb, OPB_Command* buffer, int count, int* errorCode) {
+    if (opb->disposedValue) {
+        *errorCode = OPBERR_DISPOSED;
+        return 0;
+    }
+
+    if (buffer == NULL) {
+        *errorCode = OPBERR_INVALID_BUFFER;
+        return 0;
+    }
+
+    int commandsRead;
+    *errorCode = ReadCommands(&opb->context, buffer, count, &commandsRead);
+
+    return commandsRead;
+}
+
+OPB_Command* OPB_ReadToEnd(OPB_File* opb, size_t* count, int* errorCode) {
+    if (opb->disposedValue) {
+        *errorCode = OPBERR_DISPOSED;
+        return NULL;
+    }
+
+    VectorT(OPB_Command) result = Vector_New(sizeof(OPB_Command));
+    #define OPB_READTOEND_BUFSIZE 32
+    OPB_Command buffer[OPB_READTOEND_BUFSIZE] = { 0 };
+
+    int itemsRead;
+    while ((itemsRead = OPB_ReadBuffer(opb, buffer, OPB_READTOEND_BUFSIZE, errorCode)) > 0) {
+        if (Vector_AddRange(&result, buffer, itemsRead)) {
+            Log("Vector error in OPB_ReadToEnd");
+            *errorCode = OPBERR_LOGGED;
+            break;
+        }
+    }
+
+    if (errorCode) {
+        Vector_Free(&result);
+    }
+
+    *count = result.Count;
+    return result.Storage;
+}
+
+int OPB_Reset(OPB_File* opb) {
+    if (opb->disposedValue) {
+        return OPBERR_DISPOSED;
+    }
+
+    opb->context.BufferCount = 0;
+    opb->context.ChunkIndex = 0;
+    opb->context.Time = 0;
+    opb->context.CurrentChunk = (OPB_Chunk){ 0 };
+
+    return opb->context.Seek(opb->context.UserData, (long)opb->context.ChunkDataOffset, SEEK_SET);
+}
+
+void OPB_Free(OPB_File* opb) {
+    if (!opb->disposedValue) {
+        ReadContext_Free(&opb->context);
+        opb->disposedValue = true;
     }
 }
 
-static size_t ReadFromFile(void* buffer, size_t elementSize, size_t elementCount, void* context) {
-    return fread(buffer, elementSize, elementCount, (FILE*)context);
+void OPB_OpenStream(OPB_StreamReader read, OPB_StreamSeeker seek, void* userData, OPB_File* opb) {
+    memset(opb, 0, sizeof(OPB_File));
+    opb->context.Read = read;
+    opb->context.Seek = seek;
+    opb->context.UserData = userData;
+}
+
+int OPB_OpenFile(const char* filename, OPB_File* opb) {
+    FILE* inFile;
+    if ((inFile = fopen(filename, "rb")) == NULL) {
+        Log("Couldn't open file '%s' for reading\n", filename);
+        return OPBERR_LOGGED;
+    }
+
+    OPB_OpenStream(ReadFromFile, SeekInFile, inFile, opb);
+    opb->context.UserDataDisposeType = USERDATA_DISPOSE_FCLOSE;
+    return 0;
 }
 
 int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverData) {
-    FILE* inFile;
-    if ((inFile = fopen(file, "rb")) == NULL) {
-        Log("Couldn't open file '%s' for reading\n", file);
-        return OPBERR_LOGGED;
+    OPB_File opb;
+    int ret = OPB_OpenFile(file, &opb);
+    if (ret) return ret;
+
+    OPB_Command buffer[64] = { 0 };
+
+    int errorCode;
+    int count;
+    while ((count = OPB_ReadBuffer(&opb, buffer, 64, &errorCode)) > 0) {
+        int ret = receiver(buffer, count, receiverData);
+        if (ret) {
+            errorCode = OPBERR_BUFFER_ERROR;
+            break;
+        }
     }
-    int ret = OPB_BinaryToOpl(ReadFromFile, inFile, receiver, receiverData);
-    fclose(inFile);
-    return ret;
+
+    OPB_Free(&opb);
+    return errorCode;
 }
 
 int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData) {
-    Context context = { 0 };
+    OPB_File opb;
+    OPB_OpenStream(reader, NULL, readerData, &opb);
 
-    context.Read = reader;
-    context.Submit = receiver;
-    context.UserData = readerData;
-    context.ReceiverData = receiverData;
-    context.Instruments = Vector_New(sizeof(Instrument));
+    OPB_Command buffer[64] = { 0 };
 
-    int ret = ConvertFromOpb(&context);
-    Context_Free(&context);
-
-    if (ret) {
-        Log("%s\n", OPB_GetErrorMessage(ret));
+    int errorCode;
+    int count;
+    while ((count = OPB_ReadBuffer(&opb, buffer, 64, &errorCode)) > 0) {
+        int ret = receiver(buffer, count, receiverData);
+        if (ret) {
+            errorCode = OPBERR_BUFFER_ERROR;
+            break;
+        }
     }
 
-    return ret;
+    OPB_Free(&opb);
+    return errorCode;
 }
 
 const char* OPB_GetErrorMessage(int errCode) {
     switch (errCode) {
     case OPBERR_WRITE_ERROR:
         return "A write error occurred while converting OPB";
-        break;
     case OPBERR_SEEK_ERROR:
         return "A seek error occurred while converting OPB";
-        break;
     case OPBERR_TELL_ERROR:
         return "A file position error occurred while converting OPB";
-        break;
     case OPBERR_READ_ERROR:
         return "A read error occurred while converting OPB";
-        break;
     case OPBERR_BUFFER_ERROR:
         return "A buffer error occurred while converting OPB";
-        break;
     case OPBERR_NOT_AN_OPB_FILE:
         return "Couldn't parse OPB file; not a valid OPB file";
-        break;
     case OPBERR_VERSION_UNSUPPORTED:
         return "Couldn't parse OPB file; invalid version or version unsupported";
-        break;
+    case OPBERR_OUT_OF_MEMORY:
+        return "Out of memory";
+    case OPBERR_DISPOSED:
+        return "Couldn't perform OPB_File operation; OPB_File instance was freed";
+    case OPBERR_INVALID_BUFFER:
+        return "Argument \"buffer\" cannot be NULL";
     default:
         return "Unknown OPB error";
     }

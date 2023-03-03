@@ -27,7 +27,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace OPBinarySharp {
-    public struct OPBCommand {
+    public struct OPBCommand : IEquatable<OPBCommand> {
         public ushort Addr;
         public byte Data;
         public TimeSpan Time;
@@ -38,12 +38,42 @@ namespace OPBinarySharp {
             Time = time;
         }
 
+        public override bool Equals(object obj) {
+            return obj is OPBCommand command &&
+                   Addr == command.Addr &&
+                   Data == command.Data &&
+                   Time.Equals(command.Time);
+        }
+
+        public bool Equals(OPBCommand command) {
+            return 
+                   Addr == command.Addr &&
+                   Data == command.Data &&
+                   Time.Equals(command.Time);
+        }
+
+        public override int GetHashCode() {
+            int hashCode = -594887101;
+            hashCode = hashCode * -1521134295 + Addr.GetHashCode();
+            hashCode = hashCode * -1521134295 + Data.GetHashCode();
+            hashCode = hashCode * -1521134295 + Time.GetHashCode();
+            return hashCode;
+        }
+
         public override string ToString() {
             return string.Format("OPBCommand(0x{0}, 0x{1}, {2})", 
                 Addr.ToString("X3", CultureInfo.InvariantCulture),
                 Data.ToString("X2", CultureInfo.InvariantCulture),
                 Time.ToString()
             );
+        }
+
+        public static bool operator ==(OPBCommand left, OPBCommand right) {
+            return left.Equals(right);
+        }
+
+        public static bool operator !=(OPBCommand left, OPBCommand right) {
+            return !(left == right);
         }
     }
 }
