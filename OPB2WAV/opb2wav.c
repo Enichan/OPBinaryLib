@@ -136,6 +136,11 @@ int main(int argc, char* argv[]) {
 
     OPB_Free(&opb);
 
+    // initialize OPL emulator and start processing commands/generating audio!
+    printf("Initializing OPL emulator\n");
+    opl_t* opl = OPL_Init();
+    double time = 0;
+
     // open wav file and write header (write end offset and data length after)
     printf("Writing %s\n", argv[2]);
     FILE* fout = fopen(argv[2], "wb");
@@ -152,11 +157,6 @@ int main(int argc, char* argv[]) {
     WriteUInt16(fout, 16); // bits per sample
     WriteChars(fout, "data", 4);
     WriteUInt32(fout, 0); // data length
-
-    // initialize OPL emulator and start processing commands/generating audio!
-    printf("Initializing OPL emulator\n");
-    opl_t* opl = OPL_Init();
-    double time = 0;
 
     printf("Processing OPL command stream and writing audio samples\n");
     for (size_t i = 0; i < cmdCount; i++) {
