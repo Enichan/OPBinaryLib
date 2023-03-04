@@ -102,6 +102,10 @@ static void Logger(const char* s) {
     printf(s);
 }
 
+#ifdef OPB_NOSTDLIB
+OPB_Command* ReadOPB_NOSTDLIB(const char* file, size_t* cmdCount);
+#endif
+
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         char* path = argv[0];
@@ -118,14 +122,18 @@ int main(int argc, char* argv[]) {
     // unpack OPB file into OPL3 command stream
     printf("Unpacking %s\n", argv[1]);
 
+#ifndef OPB_NOSTDLIB
+    // if we have access to malloc/free and the stdlib it's pretty easy
     OPB_File opb;
     int error;
 
+    // open our file
     if ((error = OPB_OpenFile(argv[1], &opb)) != 0) {
         printf("Error opening OPB file: %s\n", OPB_GetErrorMessage(error));
         exit(EXIT_FAILURE);
     }
 
+    // read the entire file into a command stream
     size_t cmdCount;
     OPB_Command* commands = OPB_ReadToEnd(&opb, &cmdCount, &error);
 
@@ -134,7 +142,13 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    // done!
     OPB_Free(&opb);
+#else
+    // things get more involved without the standard library, as you might imagine
+    size_t cmdCount;
+    OPB_Command* commands = ReadOPB_NOSTDLIB(argv[1], &cmdCount);
+#endif
 
     // initialize OPL emulator and start processing commands/generating audio!
     printf("Initializing OPL emulator\n");
@@ -201,3 +215,108 @@ int main(int argc, char* argv[]) {
     free(opl);
     opl = NULL;
 }
+
+
+#ifdef OPB_NOSTDLIB
+// used to read files when opblib doesn't have access to the standard library
+static size_t File_Read(void* buffer, size_t elementSize, size_t elementCount, void* context) {
+    return fread(buffer, elementSize, elementCount, (FILE*)context);
+}
+static int File_Seek(void* context, long offset, int origin) {
+    return fseek((FILE*)context, offset, origin);
+}
+static int File_Tell(void* context) {
+    return ftell((FILE*)context);
+}
+
+OPB_Command* ReadOPB_NOSTDLIB(const char* file, size_t* arrCount) {
+    // first, open our file ourselves. if this were a system that had no standard library then
+    // instead this would probably be some kind of binary blob in memory, but since this is
+    // transforming opb files into wav files we're using the file system
+    FILE* sourceFile = fopen(file, "rb");
+    if (sourceFile == NULL) {
+        printf("Error opening OPB file\n");
+        exit(EXIT_FAILURE);
+    }
+
+    OPB_File opb;
+    int error;
+
+    // next open a stream to the data using our file read/seek/tell functions
+    if ((error = OPB_OpenStream(File_Read, File_Seek, File_Tell, sourceFile, &opb)) != 0) {
+        printf("Error opening OPB file: %s\n", OPB_GetErrorMessage(error));
+        exit(EXIT_FAILURE);
+    }
+
+    // without the stdlib we have provide storage for the instruments since opblib can't use calloc
+    // to allocate storage for them. to do that get the header info which contains the instrument
+    // count and allocate a buffer big enough to hold them. in the case where the system has no
+    // memory allocator you could simply statically allocate a buffer of say, 256 instruments and
+    // let files that don't fit fail (or write a custom allocator if you're feeling frisky)
+    OPB_HeaderInfo header = OPB_GetHeaderInfo(&opb);
+    OPB_Instrument* instrumentBuffer = calloc(header.InstrumentCount, sizeof(OPB_Instrument));
+
+    if (instrumentBuffer == NULL) {
+        printf("Error opening OPB file: out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // tell the OPB_File that we're providing it an instrument buffer of a certain size. if the
+    // buffer isn't big enough this would fail with OPBERR_INSTRUMENT_BUFFER_SIZE
+    if ((error = OPB_ProvideInstrumentBuffer(&opb, instrumentBuffer, header.InstrumentCount)) != 0) {
+        printf("Error opening OPB file: %s\n", OPB_GetErrorMessage(error));
+        exit(EXIT_FAILURE);
+    }
+
+    // now we're ready to read! OPB_ReadToEnd isn't available, so we're going to use OPB_ReadBuffer
+    // and copy the items into an array which we'll grow as necessary
+    #define CMD_BUFFER_SIZE 128
+    int itemsRead;
+    OPB_Command cmdBuffer[CMD_BUFFER_SIZE];
+
+    // allocate dynamic array
+    size_t cmdCapacity = 4096;
+    size_t cmdCount = 0;
+    OPB_Command* commands = calloc(cmdCapacity, sizeof(OPB_Command));
+    if (commands == NULL) {
+        printf("Error reading OPB file: out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // read items until done, copying into commands array as we go
+    while ((itemsRead = OPB_ReadBuffer(&opb, cmdBuffer, CMD_BUFFER_SIZE, &error)) > 0) {
+        if (cmdCount + itemsRead > cmdCapacity) {
+            // array isn't large enough, allocate a bigger array and copy the old one
+            size_t newCapacity = cmdCapacity * 2;
+            OPB_Command* newCommands = calloc(newCapacity, sizeof(OPB_Command));
+            if (newCommands == NULL) {
+                printf("Error reading OPB file: out of memory\n");
+                exit(EXIT_FAILURE);
+            }
+
+            memcpy(newCommands, commands, cmdCount * sizeof(OPB_Command));
+            free(commands);
+            commands = newCommands;
+            cmdCapacity = newCapacity;
+        }
+
+        // copy items from buffer into commands array
+        memcpy(commands + cmdCount, cmdBuffer, itemsRead * sizeof(OPB_Command));
+        cmdCount += itemsRead;
+    }
+
+    // make sure to check the error code after OPB_ReadBuffer returns 0 items read!
+    if (error) {
+        printf("Error reading OPB file: %s\n", OPB_GetErrorMessage(error));
+        exit(EXIT_FAILURE);
+    }
+
+    // clean up
+    OPB_Free(&opb);
+    free(instrumentBuffer);
+    fclose(sourceFile);
+
+    *arrCount = cmdCount;
+    return commands;
+}
+#endif

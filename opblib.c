@@ -25,6 +25,8 @@
 #define _CRT_SECURE_NO_DEPRECATE
 #endif
 
+#include "opblib.h"
+
 #ifdef OPB_NOSTDLIB
 #define OPB_READONLY
 #endif
@@ -39,8 +41,6 @@
 #define SEEK_CUR 1
 #define SEEK_END 2
 #endif
-
-#include "opblib.h"
 
 #define USERDATA_DISPOSE_NONE 0
 #define USERDATA_DISPOSE_FREE 1
@@ -1576,6 +1576,7 @@ static int ReadOpbHeader(OPB_ReadContext* context) {
         return OPBERR_LOGGED;
 
     case OPB_Format_Raw:
+        context->ChunkDataOffset = OPB_HEADER_SIZE + 1;
         break;
 
     case OPB_Format_Default: {
@@ -1586,6 +1587,7 @@ static int ReadOpbHeader(OPB_ReadContext* context) {
         context->SizeBytes = header[0];
         context->InstrumentCount = header[1];
         context->ChunkCount = header[2];
+        context->ChunkDataOffset = OPB_DATA_START + context->InstrumentCount * OPB_INSTRUMENT_SIZE;
         break;
     }
     }
@@ -1612,10 +1614,8 @@ static int ReadCommands(OPB_ReadContext* context, OPB_Command* buffer, int maxCo
     *commandsRead = 0;
     int ret;
 
-    if (context->Instruments == NULL) {
-        // read header
-        ret = ReadOpbHeader(context);
-        if (ret) return ret;
+    if (!context->InstrumentsInitialized) {
+        context->InstrumentsInitialized = true;
 
         // read instruments
         if (context->Format != OPB_Format_Raw) {
@@ -1637,12 +1637,25 @@ static int ReadCommands(OPB_ReadContext* context, OPB_Command* buffer, int maxCo
                 return OPBERR_INSTRUMENT_BUFFER_SIZE_OVERFLOW;
             }
 
+            // these should only be NULL if we're coming from OPB_BinaryToOpl
+            bool canSeek = context->Tell != NULL && context->Seek != NULL;
+            
+            long offset = 0;
+            if (canSeek) {
+                offset = context->Tell(context->UserData);
+                if (offset == -1L) return OPBERR_TELL_ERROR;
+                if (context->Seek(context->UserData, OPB_DATA_START, SEEK_SET)) return OPBERR_SEEK_ERROR;
+            }
+
             for (size_t i = 0; i < context->InstrumentCount; i++) {
                 ret = ReadInstrument(context, &context->Instruments[i], i);
                 if (ret) return ret;
             }
 
-            context->ChunkDataOffset = OPB_DATA_START + context->InstrumentCount * OPB_INSTRUMENT_SIZE;
+            if (canSeek) {
+                if (offset < context->ChunkDataOffset) offset = (long)context->ChunkDataOffset;
+                if (context->Seek(context->UserData, offset, SEEK_SET)) return OPBERR_SEEK_ERROR;
+            }
         }
     }
 
@@ -1693,8 +1706,11 @@ static int ReadCommands(OPB_ReadContext* context, OPB_Command* buffer, int maxCo
     return 0;
 }
 
-// TODO: Add null checks for opb instances
 int OPB_ReadBuffer(OPB_File* opb, OPB_Command* buffer, int count, int* errorCode) {
+    if (opb == NULL) {
+        *errorCode = OPBERR_NULL_INSTANCE;
+        return 0;
+    }
     if (opb->disposedValue) {
         *errorCode = OPBERR_DISPOSED;
         return 0;
@@ -1719,6 +1735,10 @@ int OPB_ReadBuffer(OPB_File* opb, OPB_Command* buffer, int count, int* errorCode
 
 #ifndef OPB_NOSTDLIB
 OPB_Command* OPB_ReadToEnd(OPB_File* opb, size_t* count, int* errorCode) {
+    if (opb == NULL) {
+        *errorCode = OPBERR_NULL_INSTANCE;
+        return NULL;
+    }
     if (opb->disposedValue) {
         *errorCode = OPBERR_DISPOSED;
         return NULL;
@@ -1747,6 +1767,9 @@ OPB_Command* OPB_ReadToEnd(OPB_File* opb, size_t* count, int* errorCode) {
 #endif
 
 int OPB_Reset(OPB_File* opb) {
+    if (opb == NULL) {
+        return OPBERR_NULL_INSTANCE;
+    }
     if (opb->disposedValue) {
         return OPBERR_DISPOSED;
     }
@@ -1760,19 +1783,31 @@ int OPB_Reset(OPB_File* opb) {
 }
 
 void OPB_Free(OPB_File* opb) {
-    if (!opb->disposedValue) {
+    if (opb != NULL && !opb->disposedValue) {
         ReadContext_Free(&opb->context);
         opb->disposedValue = true;
     }
 }
 
-int OPB_OpenStream(OPB_StreamReader read, OPB_StreamSeeker seek, void* userData, OPB_File* opb) {
+OPB_HeaderInfo OPB_GetHeaderInfo(OPB_File* opb) {
+    OPB_HeaderInfo info = { 0 };
+    if (opb != NULL) {
+        info.Format = opb->context.Format;
+        info.SizeBytes = opb->context.SizeBytes;
+        info.InstrumentCount = opb->context.InstrumentCount;
+        info.ChunkCount = opb->context.ChunkCount;
+    }
+    return info;
+}
+
+int OPB_OpenStream(OPB_StreamReader read, OPB_StreamSeeker seek, OPB_StreamTeller tell, void* userData, OPB_File* opb) {
     OPB_File empty = { 0 };
     *opb = empty;
     opb->context.Read = read;
     opb->context.Seek = seek;
+    opb->context.Tell = tell;
     opb->context.UserData = userData;
-    return 0;
+    return ReadOpbHeader(&opb->context);
 }
 
 #ifndef OPB_NOSTDLIB
@@ -1783,7 +1818,7 @@ int OPB_OpenFile(const char* filename, OPB_File* opb) {
         return OPBERR_LOGGED;
     }
 
-    OPB_OpenStream(ReadFromFile, SeekInFile, inFile, opb);
+    OPB_OpenStream(ReadFromFile, SeekInFile, TellInFile, inFile, opb);
     opb->context.UserDataDisposeType = USERDATA_DISPOSE_FCLOSE;
     return 0;
 }
@@ -1810,9 +1845,29 @@ int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverD
 }
 #endif
 
+int OPB_ProvideInstrumentBuffer(OPB_File* opb, OPB_Instrument* buffer, size_t capacity) {
+    if (opb == NULL) {
+        return OPBERR_NULL_INSTANCE;
+    }
+    if (opb->disposedValue) {
+        return OPBERR_DISPOSED;
+    }
+    if (opb->context.InstrumentsInitialized) {
+        return OPBERR_INSTRUMENT_BUFFER_ERROR;
+    }
+    if (opb->context.InstrumentCount > capacity) {
+        return OPBERR_INSTRUMENT_BUFFER_ERROR;
+    }
+    opb->context.Instruments = buffer;
+    opb->context.InstrumentCapacity = capacity;
+    opb->context.FreeInstruments = false;
+    return 0;
+}
+
+// deprecated, kept for backward compatibility
 int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData) {
     OPB_File opb;
-    OPB_OpenStream(reader, NULL, readerData, &opb);
+    OPB_OpenStream(reader, NULL, readerData, NULL, &opb);
 
     OPB_Command buffer[64] = { 0 };
 
@@ -1862,6 +1917,12 @@ const char* OPB_GetErrorMessage(int errCode) {
         return "There was an error in the Vector type";
     case OPBERR_VEC_INDEX_OUT_OF_RANGE:
         return "Index out of range error in Vector";
+    case OPBERR_NULL_INSTANCE:
+        return "OPB_File instance was NULL";
+    case OPBERR_INSTRUMENT_BUFFER_ERROR:
+        return "OPB_File instance's instrument buffer was already initialized";
+    case OPBERR_INSTRUMENT_BUFFER_SIZE:
+        return "Instrument buffer supplied to OPB_ProvideInstrumentBuffer was not large enough to hold all instruments";
     default:
         return "Unknown OPB error";
     }
