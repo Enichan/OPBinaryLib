@@ -37,17 +37,23 @@
 #include <stdarg.h>
 #include <string.h>
 #else
+#ifndef SEEK_SET
 #define SEEK_SET 0
+#endif
+#ifndef SEEK_CUR
 #define SEEK_CUR 1
+#endif
+#ifndef SEEK_END
 #define SEEK_END 2
+#endif
 #endif
 
 #define USERDATA_DISPOSE_NONE 0
 #define USERDATA_DISPOSE_FREE 1
 #define USERDATA_DISPOSE_FCLOSE 2
 
-#define STRINGIZE_DETAIL(x) #x
-#define STRINGIZE(x) STRINGIZE_DETAIL(x)
+#define OPB_STRINGIZE_DETAIL(x) #x
+#define OPB_STRINGIZE(x) OPB_STRINGIZE_DETAIL(x)
 #define OPB_SOURCE_FILENAME "opblib.c"
 
 #define OPB_HEADER_SIZE 7
@@ -161,8 +167,8 @@ static void Vector_Sort(Vector* v, VectorSortFunc sortFunc) {
     qsort(v->Storage, v->Count, v->ElementSize, sortFunc);
 }
 
-#define LOG_VECTOR_OUT_OF_RANGE_ERR(value) Log("Vector index out of range error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n")
-#define LOG_VECTOR_GENERIC_ERR(value) Log("Vector error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n")
+#define LOG_VECTOR_OUT_OF_RANGE_ERR(value) Log("Vector index out of range error occurred in '"OPB_SOURCE_FILENAME"' at line "OPB_STRINGIZE(__LINE__)"\n")
+#define LOG_VECTOR_GENERIC_ERR(value) Log("Vector error occurred in '"OPB_SOURCE_FILENAME"' at line "OPB_STRINGIZE(__LINE__)"\n")
 
 #define RET_LOG_VECTOR_OUT_OF_RANGE_ERR(value) {\
     LOG_VECTOR_OUT_OF_RANGE_ERR(value); \
@@ -183,24 +189,24 @@ static void Vector_Sort(Vector* v, VectorSortFunc sortFunc) {
 
 #define SEEK(context, offset, origin) \
     if (context->Seek(context->UserData, offset, origin)) { \
-        Log("OPB seek error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
+        Log("OPB seek error occurred in '"OPB_SOURCE_FILENAME"' at line "OPB_STRINGIZE(__LINE__)"\n"); \
         return OPBERR_SEEK_ERROR; \
     }
 #define TELL(context, var) \
     var = context->Tell(context->UserData); \
     if (var == -1L) { \
-        Log("OPB file position error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
+        Log("OPB file position error occurred in '"OPB_SOURCE_FILENAME"' at line "OPB_STRINGIZE(__LINE__)"\n"); \
         return OPBERR_TELL_ERROR; \
     }
 
 #define READ(buffer, size, count, context) \
     if (context->Read(buffer, size, count, context->UserData) != count) { \
-        Log("OPB read error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
+        Log("OPB read error occurred in '"OPB_SOURCE_FILENAME"' at line "OPB_STRINGIZE(__LINE__)"\n"); \
         return OPBERR_READ_ERROR; \
     }
 #define READ_UINT7(var, context) \
     if ((var = ReadUint7(context)) < 0) { \
-        Log("OPB read error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
+        Log("OPB read error occurred in '"OPB_SOURCE_FILENAME"' at line "OPB_STRINGIZE(__LINE__)"\n"); \
         return OPBERR_READ_ERROR; \
     }
 
@@ -231,13 +237,13 @@ static size_t WriteToFile(const void* buffer, size_t elementSize, size_t element
 
 #define WRITE(buffer, size, count, context) \
     if (context->Write(buffer, size, count, context->UserData) != count) { \
-        Log("OPB write error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
+        Log("OPB write error occurred in '"OPB_SOURCE_FILENAME"' at line "OPB_STRINGIZE(__LINE__)"\n"); \
         return OPBERR_WRITE_ERROR; \
     }
 
 #define WRITE_UINT7(context, value) \
     if (WriteUint7(context, value)) { \
-        Log("OPB write error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
+        Log("OPB write error occurred in '"OPB_SOURCE_FILENAME"' at line "OPB_STRINGIZE(__LINE__)"\n"); \
         return OPBERR_WRITE_ERROR; \
     }
 
