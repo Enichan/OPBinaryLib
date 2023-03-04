@@ -54,64 +54,6 @@ static void OPL_Write(void* chip, int count, uint16_t* regs, uint8_t* data) {
     opl_write((opl_t*)chip, count, regs, data);
 }
 
-// sets registers so all channels should stop producing sound
-static void OPL_Clear(void* chip) {
-    uint16_t regs[0x54];
-    uint8_t data[0x54];
-
-    for (int j = 0, k = 0; j < 0x200; j += 0x100) {
-        for (int i = 0; i < 0x16; i++, k++) {
-            regs[k] = 0x40 + i + j;
-            data[k] = 0xFF;
-        }
-    }
-
-    OPL_Write(chip, 0x16 * 2, regs, data);
-
-    for (int j = 0, k = 0; j < 0x200; j += 0x100) {
-        for (int i = 0; i < 9; i++, k++) {
-            regs[k] = 0xB0 + i + j;
-            data[k] = 0;
-        }
-    }
-
-    OPL_Write(chip, 18, regs, data);
-}
-
-// CommandStream is a simple dynamic array which doubles in size when it runs out of capacity
-typedef struct CommandStream {
-    size_t Count;
-    size_t Capacity;
-    OPB_Command* Stream;
-} CommandStream;
-
-static inline int CommandStream_AdjustCapacity(CommandStream* cmds, size_t count) {
-    if (count >= cmds->Capacity) {
-        size_t newCapacity = cmds->Capacity < 16 ? 16 : cmds->Capacity;
-        while (count >= newCapacity) {
-            newCapacity *= 2; // double until capacity is greater-equal to number of items
-        }
-
-        OPB_Command* newStream = calloc(newCapacity, sizeof(OPB_Command));
-        if (newStream == NULL) {
-            printf("Out of memory in ReceiveOpbBuffer\n");
-            return -1; // error
-        }
-
-        if (cmds->Stream != NULL) {
-            // copy previous item over to new buffer
-            memcpy(newStream, cmds->Stream, sizeof(OPB_Command) * cmds->Count);
-            // release old buffer
-            free(cmds->Stream); 
-        }
-
-        // set new buffer and capacity
-        cmds->Stream = newStream;
-        cmds->Capacity = newCapacity;
-    }
-    return 0; // success
-}
-
 // used to get the exe's name when printing usage directions
 void GetFilename(char* path, char* result, size_t maxLen) {
     int lastSlash = -1;
@@ -125,23 +67,6 @@ void GetFilename(char* path, char* result, size_t maxLen) {
     if (lastSlash >= 0) strncpy(result, path + lastSlash + 1, (size_t)(maxLen - 1));
     else strncpy(result, path, (size_t)(maxLen - 1));
     result[maxLen - 1] = '\0';
-}
-
-// shoves OPB_Commands from OPB_FileToOpl into our dynamic array defined by CommandStream
-int ReceiveOpbBuffer(OPB_Command* commandStream, size_t commandCount, void* context) {
-    CommandStream* cmds = (CommandStream*)context;
-
-    // increase capacity if necessary
-    if (CommandStream_AdjustCapacity(cmds, cmds->Count + commandCount)) {
-        return -1; // out of memory
-    }
-
-    // add items
-    for (size_t i = 0; i < commandCount; i++) {
-        cmds->Stream[cmds->Count++] = commandStream[i];
-    }
-
-    return 0;
 }
 
 // some methods that make writing to file cleaner
@@ -190,16 +115,26 @@ int main(int argc, char* argv[]) {
     // set logger
     OPB_Log = Logger;
 
-    CommandStream commands = { 0 };
-
     // unpack OPB file into OPL3 command stream
     printf("Unpacking %s\n", argv[1]);
 
+    OPB_File opb;
     int error;
-    if ((error = OPB_FileToOpl(argv[1], ReceiveOpbBuffer, &commands)) != 0) {
-        printf("Error converting OPB file: %s\n", OPB_GetErrorMessage(error));
+
+    if ((error = OPB_OpenFile(argv[1], &opb)) != 0) {
+        printf("Error opening OPB file: %s\n", OPB_GetErrorMessage(error));
         exit(EXIT_FAILURE);
     }
+
+    size_t cmdCount;
+    OPB_Command* commands = OPB_ReadToEnd(&opb, &cmdCount, &error);
+
+    if (commands == NULL) {
+        printf("Error reading OPB file: %s\n", OPB_GetErrorMessage(error));
+        exit(EXIT_FAILURE);
+    }
+
+    OPB_Free(&opb);
 
     // open wav file and write header (write end offset and data length after)
     printf("Writing %s\n", argv[2]);
@@ -224,8 +159,8 @@ int main(int argc, char* argv[]) {
     double time = 0;
 
     printf("Processing OPL command stream and writing audio samples\n");
-    for (size_t i = 0; i < commands.Count; i++) {
-        OPB_Command cmd = commands.Stream[i];
+    for (size_t i = 0; i < cmdCount; i++) {
+        OPB_Command cmd = commands[i];
 
         if (cmd.Time > time) {
             // time has advanced, generate audio samples before sending this command to the OPL emulator
@@ -258,11 +193,11 @@ int main(int argc, char* argv[]) {
     fseek(fout, 40, SEEK_SET);
     WriteUInt32(fout, (uint32_t)(filelen - 44));
 
-    // done!
-    fclose(fout);
     printf("Done!\n");
 
     // clean up
+    free(commands);
+    fclose(fout);
     free(opl);
     opl = NULL;
 }

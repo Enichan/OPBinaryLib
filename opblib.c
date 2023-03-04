@@ -24,15 +24,31 @@
 #ifdef _WIN32
 #define _CRT_SECURE_NO_DEPRECATE
 #endif
+
+#ifdef OPB_NOSTDLIB
+#define OPB_READONLY
+#endif
+
+#ifndef OPB_NOSTDLIB
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#else
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#endif
+
 #include "opblib.h"
 
 #define USERDATA_DISPOSE_NONE 0
 #define USERDATA_DISPOSE_FREE 1
 #define USERDATA_DISPOSE_FCLOSE 2
+
+#define STRINGIZE_DETAIL(x) #x
+#define STRINGIZE(x) STRINGIZE_DETAIL(x)
+#define OPB_SOURCE_FILENAME "opblib.c"
 
 #define OPB_HEADER_SIZE 7
 #define OPB_DATA_START (OPB_HEADER_SIZE + 13)
@@ -41,6 +57,7 @@
 // OPBin1\0
 const char OPB_Header[OPB_HEADER_SIZE] = { 'O', 'P', 'B', 'i', 'n', '1', '\0' };
 
+#ifndef OPB_NOSTDLIB
 #define VECTOR_MIN_CAPACITY 8
 #define VECTOR_PTR(vector, index) (void*)((uint8_t*)((vector)->Storage) + (index) * vector->ElementSize)
 // this only exists to make type declarations clearer
@@ -144,18 +161,19 @@ static void Vector_Sort(Vector* v, VectorSortFunc sortFunc) {
     qsort(v->Storage, v->Count, v->ElementSize, sortFunc);
 }
 
-static const char* GetFilename(const char* path) {
-    const char* lastFwd = strrchr(path, '/');
-    const char* lastBck = strrchr(path, '\\');
-    if (lastFwd == NULL && lastBck == NULL) {
-        return path;
-    }
-    return lastFwd > lastBck ? lastFwd + 1 : lastBck + 1;
+#define LOG_VECTOR_OUT_OF_RANGE_ERR(value) Log("Vector index out of range error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n")
+#define LOG_VECTOR_GENERIC_ERR(value) Log("Vector error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n")
+
+#define RET_LOG_VECTOR_OUT_OF_RANGE_ERR(value) {\
+    LOG_VECTOR_OUT_OF_RANGE_ERR(value); \
+    return value; \
+}
+#define RET_LOG_VECTOR_GENERIC_ERR(value) {\
+    LOG_VECTOR_GENERIC_ERR(value); \
+    return value; \
 }
 
-static const char* GetSourceFilename(void) {
-    return GetFilename(__FILE__);
-}
+#endif
 
 #define CONCAT_IMPL(x, y) x##y
 #define MACRO_CONCAT(x, y) CONCAT_IMPL(x, y)
@@ -165,24 +183,24 @@ static const char* GetSourceFilename(void) {
 
 #define SEEK(context, offset, origin) \
     if (context->Seek(context->UserData, offset, origin)) { \
-        Log("OPB seek error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        Log("OPB seek error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
         return OPBERR_SEEK_ERROR; \
     }
 #define TELL(context, var) \
     var = context->Tell(context->UserData); \
     if (var == -1L) { \
-        Log("OPB file position error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        Log("OPB file position error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
         return OPBERR_TELL_ERROR; \
     }
 
 #define READ(buffer, size, count, context) \
     if (context->Read(buffer, size, count, context->UserData) != count) { \
-        Log("OPB read error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        Log("OPB read error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
         return OPBERR_READ_ERROR; \
     }
 #define READ_UINT7(var, context) \
     if ((var = ReadUint7(context)) < 0) { \
-        Log("OPB read error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        Log("OPB read error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
         return OPBERR_READ_ERROR; \
     }
 
@@ -192,6 +210,7 @@ static const char* GetSourceFilename(void) {
 typedef struct Command Command;
 typedef struct OpbData OpbData;
 
+#ifndef OPB_NOSTDLIB
 static size_t ReadFromFile(void* buffer, size_t elementSize, size_t elementCount, void* context) {
     return fread(buffer, elementSize, elementCount, (FILE*)context);
 }
@@ -203,6 +222,7 @@ static int SeekInFile(void* context, long offset, int origin) {
 static long TellInFile(void* context) {
     return ftell((FILE*)context);
 }
+#endif
 
 #ifndef OPB_READONLY
 static size_t WriteToFile(const void* buffer, size_t elementSize, size_t elementCount, void* context) {
@@ -211,13 +231,13 @@ static size_t WriteToFile(const void* buffer, size_t elementSize, size_t element
 
 #define WRITE(buffer, size, count, context) \
     if (context->Write(buffer, size, count, context->UserData) != count) { \
-        Log("OPB write error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        Log("OPB write error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
         return OPBERR_WRITE_ERROR; \
     }
 
 #define WRITE_UINT7(context, value) \
     if (WriteUint7(context, value)) { \
-        Log("OPB write error occurred in '%s' at line %d\n", GetSourceFilename(), __LINE__); \
+        Log("OPB write error occurred in '"OPB_SOURCE_FILENAME"' at line "STRINGIZE(__LINE__)"\n"); \
         return OPBERR_WRITE_ERROR; \
     }
 
@@ -245,23 +265,29 @@ static void WriteContext_Free(WriteContext* context) {
 
 static void ReadContext_Free(OPB_ReadContext* context) {
     if (context->Instruments != NULL) {
+#ifndef OPB_NOSTDLIB
         if (context->FreeInstruments) {
             free(context->Instruments);
         }
+#endif
         context->Instruments = NULL;
     }
     if (context->UserData && context->UserDataDisposeType) {
+#ifndef OPB_NOSTDLIB
         if (context->UserDataDisposeType == USERDATA_DISPOSE_FREE) {
             free(context->UserData);
         }
         else if (context->UserDataDisposeType == USERDATA_DISPOSE_FCLOSE) {
             fclose(context->UserData);
         }
+#endif
+        context->UserData = NULL;
     }
 }
 
 OPB_LogHandler OPB_Log;
 
+#ifndef OPB_NOSTDLIB
 static inline size_t BufferSize(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -296,6 +322,14 @@ static void Log(const char* format, ...) {
         free(s);
     }
 }
+#else
+static void Log(const char* s) {
+    if (!OPB_Log) return;
+    if (s != NULL) {
+        OPB_Log(s);
+    }
+}
+#endif
 
 const char* OPB_GetFormatName(OPB_Format fmt) {
     switch (fmt) {
@@ -544,14 +578,19 @@ static bool CanCombineInstrument(OPB_Instrument* instr, Command* feedconn,
     return false;
 }
 
-static OPB_Instrument GetInstrument(WriteContext* context, Command* feedconn,
+static int GetInstrument(WriteContext* context, Command* feedconn,
     Command* modChar, Command* modAttack, Command* modSustain, Command* modWave,
-    Command* carChar, Command* carAttack, Command* carSustain, Command* carWave) {
+    Command* carChar, Command* carAttack, Command* carSustain, Command* carWave, 
+    OPB_Instrument* result
+) {
     // find a matching instrument
     for (int i = 0; i < context->Instruments.Count; i++) {
         OPB_Instrument* instr = Vector_GetT(OPB_Instrument, &context->Instruments, i);
+        if (instr == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+
         if (CanCombineInstrument(instr, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave)) {
-            return *instr;
+            *result = *instr;
+            return 0;
         }
     }
 
@@ -572,8 +611,9 @@ static OPB_Instrument GetInstrument(WriteContext* context, Command* feedconn,
         },
         (int)context->Instruments.Count
     };
-    Vector_Add(&context->Instruments, &instr);
-    return instr;
+    if (Vector_Add(&context->Instruments, &instr)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    *result = instr;
+    return 0;
 }
 
 static int WriteInstrument(WriteContext* context, const OPB_Instrument* instr) {
@@ -632,15 +672,17 @@ static int WriteUint7(WriteContext* context, uint32_t value) {
     return 0;
 }
 
-static void SeparateTracks(WriteContext* context) {
+static int SeparateTracks(WriteContext* context) {
     for (int i = 0; i < context->CommandStream.Count; i++) {
         Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
+        if (cmd == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
 
         int channel = ChannelFromRegister(cmd->Addr);
         if (channel < 0) channel = NUM_TRACKS - 1;
 
-        Vector_Add(&context->Tracks[channel], cmd);
+        if (Vector_Add(&context->Tracks[channel], cmd)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
     }
+    return 0;
 }
 
 static int CountInstrumentChanges(Command* feedconn,
@@ -723,7 +765,7 @@ static int ProcessRange(WriteContext* context, int channel, double time, Command
             else if (baseAddr >= 0xC0 && baseAddr <= 0xC8)
                 feedconn = cmd;
             else {
-                Vector_Add(range, cmd);
+                if (Vector_Add(range, cmd)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
             }
         }
     }
@@ -731,7 +773,9 @@ static int ProcessRange(WriteContext* context, int channel, double time, Command
     // combine instrument data
     int instrChanges;
     if ((instrChanges = CountInstrumentChanges(feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave)) > 0) {
-        OPB_Instrument instr = GetInstrument(context, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave);
+        OPB_Instrument instr;
+        int ret = GetInstrument(context, feedconn, modChar, modAttack, modSustain, modWave, carChar, carAttack, carSustain, carWave, &instr);
+        if (ret) return ret;
 
         int size = Uint7Size((uint32_t)instr.Index) + 3;
 
@@ -786,7 +830,7 @@ static int ProcessRange(WriteContext* context, int channel, double time, Command
             if (carLevel != NULL) OpbData_WriteU8(&data, carLevel->Data);
 
             int opbIndex = (int32_t)context->DataMap.Count + 1;
-            Vector_Add(&context->DataMap, &data);
+            if (Vector_Add(&context->DataMap, &data)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
 
             Command cmd = {
                 (uint16_t)(reg + (channel >= 9 ? 0x100 : 0)), // register
@@ -796,7 +840,7 @@ static int ProcessRange(WriteContext* context, int channel, double time, Command
                 opbIndex
             };
 
-            Vector_Add(range, &cmd);
+            if (Vector_Add(range, &cmd)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
             feedconn = modChar = modLevel = modAttack = modSustain = modWave = carChar = carLevel = carAttack = carSustain = carWave = NULL;
 
             if (freq != NULL && note != NULL) {
@@ -833,7 +877,7 @@ static int ProcessRange(WriteContext* context, int channel, double time, Command
         }
 
         int opbIndex = (int32_t)context->DataMap.Count + 1;
-        Vector_Add(&context->DataMap, &data);
+        if (Vector_Add(&context->DataMap, &data)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
 
         Command cmd = {
             (uint16_t)reg, // register
@@ -843,25 +887,25 @@ static int ProcessRange(WriteContext* context, int channel, double time, Command
             opbIndex
         };
 
-        Vector_Add(range, &cmd);
+        if (Vector_Add(range, &cmd)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
         freq = note = modLevel = carLevel = NULL;
     }
 
-    if (modChar != NULL) Vector_Add(range, modChar);
-    if (modLevel != NULL) Vector_Add(range, modLevel);
-    if (modAttack != NULL) Vector_Add(range, modAttack);
-    if (modSustain != NULL) Vector_Add(range, modSustain);
-    if (modWave != NULL) Vector_Add(range, modWave);
+    if (modChar != NULL) if (Vector_Add(range, modChar)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (modLevel != NULL) if (Vector_Add(range, modLevel)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (modAttack != NULL) if (Vector_Add(range, modAttack)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (modSustain != NULL) if (Vector_Add(range, modSustain)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (modWave != NULL) if (Vector_Add(range, modWave)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
 
-    if (carChar != NULL) Vector_Add(range, carChar);
-    if (carLevel != NULL) Vector_Add(range, carLevel);
-    if (carAttack != NULL) Vector_Add(range, carAttack);
-    if (carSustain != NULL) Vector_Add(range, carSustain);
-    if (carWave != NULL) Vector_Add(range, carWave);
+    if (carChar != NULL) if (Vector_Add(range, carChar)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (carLevel != NULL) if (Vector_Add(range, carLevel)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (carAttack != NULL) if (Vector_Add(range, carAttack)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (carSustain != NULL) if (Vector_Add(range, carSustain)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (carWave != NULL) if (Vector_Add(range, carWave)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
 
-    if (feedconn != NULL) Vector_Add(range, feedconn);
-    if (freq != NULL) Vector_Add(range, freq);
-    if (note != NULL) Vector_Add(range, note);
+    if (feedconn != NULL) if (Vector_Add(range, feedconn)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (freq != NULL) if (Vector_Add(range, freq)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+    if (note != NULL) if (Vector_Add(range, note)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
 
     return 0;
 }
@@ -873,20 +917,37 @@ static int ProcessTrack(WriteContext* context, int channel, Vector* chOut) {
         return 0;
     }
 
-    int lastOrder = Vector_GetT(Command, commands, 0)->OrderIndex;
+    Command* cmd;
+
+    cmd = Vector_GetT(Command, commands, 0);
+    if (cmd == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+
+    int lastOrder = cmd->OrderIndex;
     int i = 0;
 
     while (i < commands->Count) {
-        double time = Vector_GetT(Command, commands, i)->Time;
+        cmd = Vector_GetT(Command, commands, i);
+        if (cmd == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+
+        double time = cmd->Time;
 
         int start = i;
+
         // sequences must be all in the same time block and in order
         // sequences are capped by a note command (write to register B0-B8 or 1B0-1B8)
-        while (i < commands->Count && Vector_GetT(Command, commands, i)->Time <= time && (Vector_GetT(Command, commands, i)->OrderIndex - lastOrder) <= 1) {
-            Command* cmd = Vector_GetT(Command, commands, i);
+        Command* next = Vector_GetT(Command, commands, i);
+        if (next == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+
+        while (i < commands->Count && next->Time <= time && (next->OrderIndex - lastOrder) <= 1) {
+            cmd = next;
 
             lastOrder = cmd->OrderIndex;
             i++;
+
+            if (i < commands->Count) {
+                next = Vector_GetT(Command, commands, i);
+                if (next == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+            }
 
             if (IsChannelNoteEvent(cmd->Addr, channel)) {
                 break;
@@ -895,17 +956,22 @@ static int ProcessTrack(WriteContext* context, int channel, Vector* chOut) {
         int end = i;
 
         VectorT(Command) range = Vector_New(sizeof(Command));
-        int ret = ProcessRange(context, channel, time, Vector_GetT(Command, commands, start), end - start, &range, start, end);
+        Command* commandPtr = Vector_GetT(Command, commands, start);
+        if (commandPtr == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+
+        int ret = ProcessRange(context, channel, time, commandPtr, end - start, &range, start, end);
         if (ret) {
             Vector_Free(&range);
             return ret;
         }
         
-        Vector_AddRange(chOut, range.Storage, range.Count);
+        if (Vector_AddRange(chOut, range.Storage, range.Count)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
         Vector_Free(&range);
 
         if (i < commands->Count) {
-            lastOrder = Vector_GetT(Command, commands, i)->OrderIndex;
+            cmd = Vector_GetT(Command, commands, i);
+            if (cmd == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+            lastOrder = cmd->OrderIndex;
         }
     }
 
@@ -919,6 +985,7 @@ static int WriteChunk(WriteContext* context, double elapsed, int start, int coun
 
     for (int i = start; i < start + count; i++) {
         Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
+        if (cmd == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
 
         if ((cmd->Addr & 0x100) == 0) {
             loCount++;
@@ -938,6 +1005,7 @@ static int WriteChunk(WriteContext* context, double elapsed, int start, int coun
     while (true) {
         for (int i = start; i < start + count; i++) {
             Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
+            if (cmd == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
 
             if (((cmd->Addr & 0x100) == 0) == isLow) {
                 uint8_t baseAddr = cmd->Addr & 0xFF;
@@ -951,6 +1019,7 @@ static int WriteChunk(WriteContext* context, double elapsed, int start, int coun
 
                     // opb command
                     OpbData* data = Vector_GetT(OpbData, &context->DataMap, cmd->DataIndex - 1);
+                    if (data == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
                     WRITE(data->Args, sizeof(uint8_t), data->Count, context);
                 }
                 else {
@@ -997,6 +1066,7 @@ static int ConvertToOpb(WriteContext* context) {
         double lastTime = 0.0;
         for (int i = 0; i < context->CommandStream.Count; i++) {
             Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
+            if (cmd == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
 
             uint16_t elapsed = FlipEndian16((uint16_t)((cmd->Time - lastTime) * 1000.0));
             uint16_t addr = FlipEndian16(cmd->Addr);
@@ -1011,7 +1081,8 @@ static int ConvertToOpb(WriteContext* context) {
 
     // separate command stream into tracks
     Log("Separating OPL data stream into channels\n");
-    SeparateTracks(context);
+    int ret = SeparateTracks(context);
+    if (ret) return ret;
 
     // process each track into its own output vector
     VectorT(Command) chOut[NUM_TRACKS];
@@ -1033,7 +1104,7 @@ static int ConvertToOpb(WriteContext* context) {
     Log("Combining processed data into linear stream\n");
     Vector_Clear(&context->CommandStream, true);
     for (int i = 0; i < NUM_TRACKS; i++) {
-        Vector_AddRange(&context->CommandStream, chOut[i].Storage, chOut[i].Count);
+        if (Vector_AddRange(&context->CommandStream, chOut[i].Storage, chOut[i].Count)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
     }
 
     for (int j = 0; j < NUM_TRACKS; j++) {
@@ -1048,7 +1119,9 @@ static int ConvertToOpb(WriteContext* context) {
 
     Log("Writing instrument table\n");
     for (int i = 0; i < context->Instruments.Count; i++) {
-        int ret = WriteInstrument(context, Vector_GetT(OPB_Instrument, &context->Instruments, i));
+        OPB_Instrument* instr = Vector_GetT(OPB_Instrument, &context->Instruments, i);
+        if (instr == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+        int ret = WriteInstrument(context, instr);
         if (ret) return ret;
     }
 
@@ -1060,11 +1133,20 @@ static int ConvertToOpb(WriteContext* context) {
 
         Log("Writing chunks\n");
         while (i < context->CommandStream.Count) {
-            double chunkTime = Vector_GetT(Command, &context->CommandStream, i)->Time;
+            Command* cmd = Vector_GetT(Command, &context->CommandStream, i);
+            if (cmd == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+            double chunkTime = cmd->Time;
+
+            Command* next = Vector_GetT(Command, &context->CommandStream, i);
+            if (next == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
 
             int start = i;
-            while (i < context->CommandStream.Count && Vector_GetT(Command, &context->CommandStream, i)->Time <= chunkTime) {
+            while (i < context->CommandStream.Count && next->Time <= chunkTime) {
                 i++;
+                if (i < context->CommandStream.Count) {
+                    next = Vector_GetT(Command, &context->CommandStream, i);
+                    if (next == NULL) RET_LOG_VECTOR_OUT_OF_RANGE_ERR(OPBERR_VEC_INDEX_OUT_OF_RANGE);
+                }
             }
             int end = i;
 
@@ -1134,7 +1216,7 @@ int OPB_OplToBinary(OPB_Format format, OPB_Command* commandStream, size_t comman
                 0               // Data index
             };
 
-            Vector_Add(&context.CommandStream, &cmd);
+            if (Vector_Add(&context.CommandStream, &cmd)) RET_LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
         }
     }
 
@@ -1229,7 +1311,11 @@ static int ReadCommand(OPB_ReadContext* context) {
             channel &= 0b00011111;
 
             if (channel < 0 || channel >= NUM_CHANNELS) {
+#ifndef OPB_NOSTDLIB
                 Log("Error reading OPB command: channel %d out of range\n", channel);
+#else
+                Log("Error reading OPB command: channel out of range\n");
+#endif
                 return OPBERR_LOGGED;
             }
 
@@ -1255,7 +1341,11 @@ static int ReadCommand(OPB_ReadContext* context) {
             if (carLvl) READ(&carLvlData, sizeof(uint8_t), 1, context);
 
             if (instrIndex < 0 || instrIndex >= context->InstrumentCount) {
+#ifndef OPB_NOSTDLIB
                 Log("Error reading OPB command: instrument %d out of range\n", instrIndex);
+#else
+                Log("Error reading OPB command: instrument out of range\n");
+#endif
                 return OPBERR_LOGGED;
             }
 
@@ -1296,7 +1386,11 @@ static int ReadCommand(OPB_ReadContext* context) {
             int channel = (baseAddr - 0xD7) + (mask != 0 ? 9 : 0);
 
             if (channel < 0 || channel >= NUM_CHANNELS) {
+#ifndef OPB_NOSTDLIB
                 Log("Error reading OPB command: channel %d out of range\n", channel);
+#else
+                Log("Error reading OPB command: channel out of range\n");
+#endif
                 return OPBERR_LOGGED;
             }
 
@@ -1453,7 +1547,7 @@ static int ReadOpbHeader(OPB_ReadContext* context) {
     char id[OPB_HEADER_SIZE + 1] = { 0 };
     READ(id, sizeof(char), OPB_HEADER_SIZE, context);
 
-    if (strncmp(id, "OPBin", 5)) {
+    if (id[0] != 'O' || id[1] != 'P' || id[2] != 'B' || id[3] != 'i' || id[4] != 'n') {
         return OPBERR_NOT_AN_OPB_FILE;
     }
     
@@ -1474,7 +1568,11 @@ static int ReadOpbHeader(OPB_ReadContext* context) {
 
     switch (context->Format) {
     default:
+#ifndef OPB_NOSTDLIB
         Log("Error reading OPB file: unknown format %d\n", fmt);
+#else
+        Log("Error reading OPB file: unknown format\n");
+#endif
         return OPBERR_LOGGED;
 
     case OPB_Format_Raw:
@@ -1521,11 +1619,22 @@ static int ReadCommands(OPB_ReadContext* context, OPB_Command* buffer, int maxCo
 
         // read instruments
         if (context->Format != OPB_Format_Raw) {
+#ifndef OPB_NOSTDLIB
             context->Instruments = calloc(context->InstrumentCount, sizeof(OPB_Instrument));
+            context->InstrumentCapacity = context->InstrumentCount;
             context->FreeInstruments = true;
 
             if (context->Instruments == NULL) {
                 return OPBERR_OUT_OF_MEMORY;
+            }
+#else
+            if (context->Instruments == NULL) {
+                return OPBERR_NO_INSTRUMENT_BUFFER;
+            }
+#endif
+
+            if (context->InstrumentCapacity < context->InstrumentCount) {
+                return OPBERR_INSTRUMENT_BUFFER_SIZE_OVERFLOW;
             }
 
             for (size_t i = 0; i < context->InstrumentCount; i++) {
@@ -1599,9 +1708,16 @@ int OPB_ReadBuffer(OPB_File* opb, OPB_Command* buffer, int count, int* errorCode
     int commandsRead;
     *errorCode = ReadCommands(&opb->context, buffer, count, &commandsRead);
 
+    if (*errorCode) {
+        // this should be zero when returning from ReadCommands with an error
+        // but an extra check for safety can't hurt
+        commandsRead = 0;
+    }
+
     return commandsRead;
 }
 
+#ifndef OPB_NOSTDLIB
 OPB_Command* OPB_ReadToEnd(OPB_File* opb, size_t* count, int* errorCode) {
     if (opb->disposedValue) {
         *errorCode = OPBERR_DISPOSED;
@@ -1615,19 +1731,20 @@ OPB_Command* OPB_ReadToEnd(OPB_File* opb, size_t* count, int* errorCode) {
     int itemsRead;
     while ((itemsRead = OPB_ReadBuffer(opb, buffer, OPB_READTOEND_BUFSIZE, errorCode)) > 0) {
         if (Vector_AddRange(&result, buffer, itemsRead)) {
-            Log("Vector error in OPB_ReadToEnd");
-            *errorCode = OPBERR_LOGGED;
+            LOG_VECTOR_GENERIC_ERR(OPBERR_VECTOR_ERROR);
+            *errorCode = OPBERR_VECTOR_ERROR;
             break;
         }
     }
 
-    if (errorCode) {
+    if (*errorCode) {
         Vector_Free(&result);
     }
 
     *count = result.Count;
     return result.Storage;
 }
+#endif
 
 int OPB_Reset(OPB_File* opb) {
     if (opb->disposedValue) {
@@ -1649,13 +1766,16 @@ void OPB_Free(OPB_File* opb) {
     }
 }
 
-void OPB_OpenStream(OPB_StreamReader read, OPB_StreamSeeker seek, void* userData, OPB_File* opb) {
-    memset(opb, 0, sizeof(OPB_File));
+int OPB_OpenStream(OPB_StreamReader read, OPB_StreamSeeker seek, void* userData, OPB_File* opb) {
+    OPB_File empty = { 0 };
+    *opb = empty;
     opb->context.Read = read;
     opb->context.Seek = seek;
     opb->context.UserData = userData;
+    return 0;
 }
 
+#ifndef OPB_NOSTDLIB
 int OPB_OpenFile(const char* filename, OPB_File* opb) {
     FILE* inFile;
     if ((inFile = fopen(filename, "rb")) == NULL) {
@@ -1688,6 +1808,7 @@ int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverD
     OPB_Free(&opb);
     return errorCode;
 }
+#endif
 
 int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData) {
     OPB_File opb;
@@ -1711,6 +1832,8 @@ int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceive
 
 const char* OPB_GetErrorMessage(int errCode) {
     switch (errCode) {
+    case OPBERR_LOGGED:
+        return "OPB error was logged";
     case OPBERR_WRITE_ERROR:
         return "A write error occurred while converting OPB";
     case OPBERR_SEEK_ERROR:
@@ -1731,6 +1854,14 @@ const char* OPB_GetErrorMessage(int errCode) {
         return "Couldn't perform OPB_File operation; OPB_File instance was freed";
     case OPBERR_INVALID_BUFFER:
         return "Argument \"buffer\" cannot be NULL";
+    case OPBERR_NO_INSTRUMENT_BUFFER:
+        return "No instrument buffer was supplied and calloc was disabled";
+    case OPBERR_INSTRUMENT_BUFFER_SIZE_OVERFLOW:
+        return "The supplied instrument buffer's capacity was insufficient to hold all items";
+    case OPBERR_VECTOR_ERROR:
+        return "There was an error in the Vector type";
+    case OPBERR_VEC_INDEX_OUT_OF_RANGE:
+        return "Index out of range error in Vector";
     default:
         return "Unknown OPB error";
     }

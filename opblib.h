@@ -45,6 +45,10 @@ extern "C" {
     #define OPBERR_OUT_OF_MEMORY 9
     #define OPBERR_DISPOSED 10
     #define OPBERR_INVALID_BUFFER 11
+    #define OPBERR_NO_INSTRUMENT_BUFFER 12
+    #define OPBERR_INSTRUMENT_BUFFER_SIZE_OVERFLOW 13
+    #define OPBERR_VECTOR_ERROR 14
+    #define OPBERR_VEC_INDEX_OUT_OF_RANGE 15
 
     typedef struct OPB_Command {
         uint16_t Addr;
@@ -99,6 +103,32 @@ extern "C" {
     // OPL command stream to file. Returns 0 if successful.
     int OPB_OplToFile(OPB_Format format, OPB_Command* commandStream, size_t commandCount, const char* file);
 
+    // Open OPB binary for reading through OPB_File instance. Returns 0 if successful.
+    int OPB_OpenStream(OPB_StreamReader read, OPB_StreamSeeker seek, void* userData, OPB_File* opb);
+
+#ifndef OPB_NOSTDLIB
+    // Open OPB file for reading through OPB_File instance. Returns 0 if successful.
+    int OPB_OpenFile(const char* filename, OPB_File* opb);
+#endif
+
+    // Read a maximum of `count` OPL commands into array `buffer`. Returns the number of items read,
+    // or zero if the end of the OPL command stream was reached or an error occurred. In the case of
+    // an error, errorCode will be set to a non-zero value.
+    int OPB_ReadBuffer(OPB_File* opb, OPB_Command* buffer, int count, int* errorCode);
+
+#ifndef OPB_NOSTDLIB
+    // Reads to the end of the OPL command stream and returns an array containing the read commands
+    // containing `count` items. If an error occurs the returned value will be NULL and errorCode
+    // will be set to a non-zero value.
+    OPB_Command* OPB_ReadToEnd(OPB_File* opb, size_t* count, int* errorCode);
+#endif
+
+    // Dispose of OPB_File instance
+    void OPB_Free(OPB_File* opb);
+
+    // Rewind OPB_File instance back to the start of the OPL command stream. Returns 0 if successful.
+    int OPB_Reset(OPB_File* opb);
+
     // OPBLib log function
     typedef void (*OPB_LogHandler)(const char* s);
     extern OPB_LogHandler OPB_Log;
@@ -131,6 +161,7 @@ extern "C" {
         OPB_StreamSeeker Seek;
         bool FreeInstruments;
         OPB_Instrument* Instruments;
+        size_t InstrumentCapacity;
         double Time;
 
         size_t ChunkIndex;
@@ -156,9 +187,11 @@ extern "C" {
     // OPB binary to OPL command stream. Returns 0 if successful.
     int OPB_BinaryToOpl(OPB_StreamReader reader, void* readerData, OPB_BufferReceiver receiver, void* receiverData);
 
+#ifndef OPB_NOSTDLIB
     // DEPRECATED: Use OPB_File via OPB_OpenFile
     // OPB file to OPL command stream. Returns 0 if successful.
     int OPB_FileToOpl(const char* file, OPB_BufferReceiver receiver, void* receiverData);
+#endif
 
 #ifdef __cplusplus
 }
