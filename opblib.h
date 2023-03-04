@@ -39,7 +39,7 @@ extern "C" {
 
     // uncomment to disable dependence on C standard library (sets OPB_READONLY)
     // OPB_NOSTDLIB requires providing an instrument buffer, see OPB_ProvideInstrumentBuffer
-    #define OPB_NOSTDLIB
+    //#define OPB_NOSTDLIB
 
     #define OPBERR_LOGGED 1 // an error occurred and what error that was has been sent to OPB_Log
     #define OPBERR_WRITE_ERROR 2

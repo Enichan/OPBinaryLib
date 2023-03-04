@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
     printf("Unpacking %s\n", argv[1]);
 
 #ifndef OPB_NOSTDLIB
-    // if we have access to malloc/free and the stdlib it's pretty easy
+    // if we have access to malloc/free and the stdlib things are pretty easy
     OPB_File opb;
     int error;
 
