@@ -150,7 +150,10 @@ extern "C" {
     // Rewind OPB_File instance back to the start of the OPL command stream. Returns 0 if successful.
     int OPB_Reset(OPB_File* opb);
 
-    // Dispose of OPB_File instance
+    // Dispose of OPB_File instance. NOTE: This will only free resources held by the OPB_File instance,
+    // it *will not* call `free` on the pointer itself! This is because the original struct may have been
+    // allocated on the stack. The caller is responsible for freeing the OPB_File pointer itself if it
+    // was created using malloc/calloc
     void OPB_Free(OPB_File* opb);
 
     // Provide buffer for instruments for OPB_File instance to use instead of allowing it to use calloc

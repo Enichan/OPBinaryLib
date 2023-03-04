@@ -45,6 +45,7 @@
     <Compile Include="OPBCommand.cs" />
     <Compile Include="OPBException.cs" />
     <Compile Include="OPBFormat.cs" />
+    <Compile Include="OPBHeaderInfo.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="VGM.cs" />
   </ItemGroup>

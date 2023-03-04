@@ -1494,6 +1494,12 @@ namespace OPBinarySharp {
             context.CurrentChunk = default(Chunk);
         }
 
+        public OPBHeaderInfo HeaderInfo {
+            get {
+                return new OPBHeaderInfo(context.Format, context.SizeBytes, context.InstrumentCount, context.ChunkCount);
+            }
+        }
+
         #region IDisposable
         protected virtual void Dispose(bool disposing) {
             if (!disposedValue) {
